@@ -4,6 +4,18 @@ type RoutableContext = AudioContext & {
   setSinkId?: (id: string) => Promise<void>;
 };
 export type AudioSettings = { sampleRate: number; bufferSize: number };
+export type PlaybackTrack = {
+  id: string;
+  volume: number;
+  muted: boolean;
+  solo: boolean;
+  clips: {
+    buffer: AudioBuffer;
+    start: number;
+    offset: number;
+    duration: number;
+  }[];
+};
 export type AudioSnapshot = {
   status: 'stopped' | 'playing' | 'paused';
   contextState: string;
@@ -18,6 +30,7 @@ export type AudioSnapshot = {
   deviceId: string;
   volume: number;
   muted: boolean;
+  duration: number;
 };
 
 export class AudioEngine {
@@ -27,6 +40,9 @@ export class AudioEngine {
   private analysers: AnalyserNode[] = [];
   private meterData: Float32Array<ArrayBuffer>[] = [];
   private source: AudioBufferSourceNode | null = null;
+  private arrangement: PlaybackTrack[] | null = null;
+  private scheduled: AudioBufferSourceNode[] = [];
+  private trackGains: GainNode[] = [];
   private offset = 0;
   private startedAt = 0;
   private generation = 0;
@@ -45,6 +61,7 @@ export class AudioEngine {
     deviceId: '',
     volume: -6,
     muted: false,
+    duration: 0,
   };
 
   getSnapshot = () => this.state;
@@ -62,7 +79,7 @@ export class AudioEngine {
   get position() {
     if (this.state.status !== 'playing' || !this.context) return this.offset;
     return Math.min(
-      this.state.buffer?.duration ?? 0,
+      this.state.duration,
       this.offset + this.context.currentTime - this.startedAt,
     );
   }
@@ -135,7 +152,7 @@ export class AudioEngine {
     return this.context!;
   }
 
-  async load(file: File) {
+  async decodeFile(file: File) {
     if (file.size > 150 * 1024 * 1024)
       throw new Error('Choose a WAV smaller than 150 MB.');
     const bytes = await file.arrayBuffer();
@@ -143,18 +160,92 @@ export class AudioEngine {
     const context = await this.ensureContext();
     let buffer: AudioBuffer;
     try {
-      buffer = await context.decodeAudioData(bytes);
+      buffer = await context.decodeAudioData(bytes.slice(0));
     } catch {
       throw new Error(
         'This WAV could not be decoded. Try an uncompressed PCM or floating-point WAV.',
       );
     }
     if (!buffer.length) throw new Error('This WAV contains no audio.');
+    return { buffer, wav, bytes };
+  }
+
+  async load(file: File) {
+    const { buffer, wav } = await this.decodeFile(file);
     this.stop();
-    this.update({ buffer, wav, fileName: file.name, fileSize: file.size });
+    this.arrangement = null;
+    this.update({
+      buffer,
+      wav,
+      fileName: file.name,
+      fileSize: file.size,
+      duration: buffer.duration,
+    });
+  }
+
+  setArrangement(tracks: PlaybackTrack[], duration: number) {
+    const playing = this.state.status === 'playing';
+    const position = this.position;
+    this.generation++;
+    this.disconnectSource();
+    this.arrangement = tracks;
+    this.offset = Math.min(position, duration);
+    this.update({ duration, status: playing ? 'paused' : this.state.status });
+    if (playing && this.offset < duration) this.startSource();
+  }
+
+  private startArrangement() {
+    const context = this.context!;
+    const anySolo = this.arrangement!.some((track) => track.solo);
+    // All clips share one audio-clock origin, including overlaps and future starts.
+    const origin = context.currentTime;
+    for (const track of this.arrangement!) {
+      const gain = context.createGain();
+      gain.gain.value =
+        track.muted || (anySolo && !track.solo) ? 0 : dbToGain(track.volume);
+      gain.connect(this.master!);
+      this.trackGains.push(gain);
+      for (const clip of track.clips) {
+        const elapsed = Math.max(0, this.offset - clip.start);
+        if (elapsed >= clip.duration) continue;
+        const source = context.createBufferSource();
+        source.buffer = clip.buffer;
+        source.connect(gain);
+        source.start(
+          origin + Math.max(0, clip.start - this.offset),
+          clip.offset + elapsed,
+          clip.duration - elapsed,
+        );
+        this.scheduled.push(source);
+      }
+    }
+    // A silent boundary keeps the transport accurate through gaps and muted tracks.
+    const boundary = context.createBufferSource();
+    boundary.buffer = context.createBuffer(1, 1, context.sampleRate);
+    boundary.connect(this.master!);
+    boundary.onended = () => {
+      if (this.source !== boundary) return;
+      this.source = null;
+      boundary.disconnect();
+      this.disconnectSource();
+      this.offset = this.state.duration;
+      this.update({ status: 'stopped' });
+    };
+    this.source = boundary;
+    this.startedAt = origin;
+    boundary.start(origin + Math.max(0, this.state.duration - this.offset));
+    this.update({ status: 'playing', contextState: context.state });
   }
 
   private disconnectSource() {
+    this.scheduled.forEach((source) => {
+      source.onended = null;
+      source.stop();
+      source.disconnect();
+    });
+    this.scheduled = [];
+    this.trackGains.forEach((gain) => gain.disconnect());
+    this.trackGains = [];
     if (!this.source) return;
     this.source.onended = null;
     this.source.stop();
@@ -163,6 +254,10 @@ export class AudioEngine {
   }
 
   private startSource() {
+    if (this.arrangement && this.context && this.master) {
+      this.startArrangement();
+      return;
+    }
     if (!this.context || !this.master || !this.state.buffer) return;
     const source = this.context.createBufferSource();
     source.buffer = this.state.buffer;
@@ -171,7 +266,7 @@ export class AudioEngine {
       if (this.source !== source) return;
       source.disconnect();
       this.source = null;
-      this.offset = this.state.buffer!.duration;
+      this.offset = this.state.duration;
       this.update({ status: 'stopped' });
     };
     this.startedAt = this.context.currentTime;
@@ -181,7 +276,11 @@ export class AudioEngine {
   }
 
   async play() {
-    if (!this.state.buffer || this.state.status === 'playing') return;
+    if (
+      (!this.state.buffer && !this.arrangement) ||
+      this.state.status === 'playing'
+    )
+      return;
     const generation = ++this.generation;
     const context = await this.ensureContext();
     await context.resume();
@@ -190,7 +289,7 @@ export class AudioEngine {
       throw new Error(
         'Audio is interrupted. Press play again when your output is available.',
       );
-    if (this.offset >= this.state.buffer.duration) this.offset = 0;
+    if (this.offset >= this.state.duration) this.offset = 0;
     this.startSource();
   }
 
@@ -199,7 +298,9 @@ export class AudioEngine {
     const position = this.position;
     this.disconnectSource();
     this.offset = position;
-    this.update({ status: this.state.buffer ? 'paused' : 'stopped' });
+    this.update({
+      status: this.state.buffer || this.arrangement ? 'paused' : 'stopped',
+    });
   }
 
   stop() {
@@ -210,12 +311,12 @@ export class AudioEngine {
   }
 
   seek(seconds: number) {
-    if (!this.state.buffer) return;
+    if (!this.state.buffer && !this.arrangement) return;
     const playing = this.state.status === 'playing';
     this.generation++;
     this.disconnectSource();
-    this.offset = Math.max(0, Math.min(this.state.buffer.duration, seconds));
-    if (playing && this.offset < this.state.buffer.duration) this.startSource();
+    this.offset = Math.max(0, Math.min(this.state.duration, seconds));
+    if (playing && this.offset < this.state.duration) this.startSource();
     else this.update({ status: playing ? 'stopped' : this.state.status });
   }
 
