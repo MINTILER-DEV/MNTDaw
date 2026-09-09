@@ -179,9 +179,7 @@ export function parseProject(json: string): {
     if (
       typeof asset.data !== 'string' ||
       asset.data.length % 4 !== 0 ||
-      !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(
-        asset.data,
-      )
+      !/^[A-Za-z0-9+/]*={0,2}$/.test(asset.data)
     )
       throw new Error(`Invalid embedded audio: ${name}.`);
     total += asset.data.length * 0.75;
@@ -216,7 +214,7 @@ export function parseProject(json: string): {
         durationSeconds: number(
           clip.durationSeconds,
           'clip duration',
-          0.001,
+          Number.MIN_VALUE,
           86400,
         ),
       };
