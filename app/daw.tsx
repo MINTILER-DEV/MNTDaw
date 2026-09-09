@@ -29,6 +29,7 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   Pause,
+  Piano,
   Play,
   Plus,
   Redo2,
@@ -59,12 +60,15 @@ import {
   LevelMeter,
   NumberField,
 } from '@/components/daw-controls';
+import { PianoRoll } from '@/components/piano-roll';
+import { InstrumentPanel } from '@/components/instrument-panel';
+import { EditMenu, type EditAction } from '@/components/edit-menu';
+import { signatureBars, signaturePosition, type Signature, type SignatureMarker } from '@/lib/time-signatures';
 import { ProjectSession } from '@/lib/project-session';
 import {
   beatsToSeconds,
   secondsToBeats,
   clipEndBeat,
-  musicalPosition,
   newTrack,
   projectLength,
   snapBeat,
@@ -139,6 +143,10 @@ export default function Daw() {
   const [error, setError] = useState('');
   const [settings, setSettings] = useState(false);
   const [help, setHelp] = useState(false);
+  const [roll, setRoll] = useState(false);
+  const [signatureEdit, setSignatureEdit] = useState<{ id?: string; beat: number; signature: Signature } | null>(null);
+  const [resize, setResize] = useState<{ id: string; y: number; initial: number; height: number } | null>(null);
+  const resizeRef = useRef<typeof resize>(null);
   const [discard, setDiscard] = useState<'new' | 'open' | null>(null);
   const [library, setLibrary] = useState(
     () => window.matchMedia('(min-width: 1101px)').matches,
@@ -147,6 +155,7 @@ export default function Daw() {
   const [zoom, setZoom] = useState(26);
   const [drag, setDrag] = useState<Drag | null>(null);
   const dragRef = useRef<Drag | null>(null);
+  const midiInput = useRef<HTMLInputElement>(null);
   const wavInput = useRef<HTMLInputElement>(null);
   const projectInput = useRef<HTMLInputElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -174,6 +183,11 @@ export default function Daw() {
     0,
   );
   const timelineWidth = length * zoom;
+  const markers = project.signatureMarkers ?? [];
+  const bars = useMemo(() => signatureBars(project.timeSignature, project.signatureMarkers ?? [], length), [project.timeSignature, project.signatureMarkers, length]);
+  const currentSignature = [...markers].sort((a,b) => a.beat - b.beat).filter(m => m.beat <= beat).at(-1)?.signature ?? project.timeSignature;
+  const rowHeight = (track: Track) => resize?.id === track.id ? resize.height : track.height ?? ROW_HEIGHT;
+  const rowTop = (id: string) => { let top = 0; for (const t of project.tracks) { if (t.id === id) return top; top += rowHeight(t); } return top; };
   const anySolo = project.tracks.some((track) => track.solo);
   const report = useCallback((text: string) => setMessage(text), []);
 
@@ -256,12 +270,12 @@ export default function Daw() {
       })),
     }));
 
-  const addTrack = () => {
+  const addTrack = (kind: 'audio' | 'midi' = 'audio') => {
     if (project.tracks.length >= 64) {
       setError('Projects support up to 64 tracks.');
       return;
     }
-    const track = newTrack(project.tracks.length);
+    const track = newTrack(project.tracks.length, kind);
     session.edit((previous) => ({
       ...previous,
       tracks: [...previous.tracks, track],
@@ -277,6 +291,7 @@ export default function Daw() {
     }
     const copy = {
       ...selectedClip,
+      notes: selectedClip.notes?.map(n => ({ ...n,id:crypto.randomUUID() })),
       id: crypto.randomUUID(),
       startBeat: Math.min(100000, clipEndBeat(selectedClip, project.tempo)),
     };
@@ -302,7 +317,7 @@ export default function Daw() {
     const asset = session.assets.get(assetId);
     const metadata = project.assets.find((item) => item.id === assetId);
     const track = project.tracks.find((item) => item.id === trackId);
-    if (!asset || !metadata || !track) return;
+    if (!asset || !metadata || !track || track.kind === 'midi') return;
     if (totalClips >= 2048) {
       setError('Projects support up to 2048 clips.');
       return;
@@ -324,18 +339,20 @@ export default function Daw() {
     target: { trackId: string | null; beat: number },
   ) =>
     void run('Importing audio', async () => {
+      for (const file of files.filter(f => /\.midi?$/i.test(f.name))) { selectClip(await session.importMidi(file, snapBeat(target.beat,snap))); setRoll(true); }
+      const audioFiles = files.filter(f => !/\.midi?$/i.test(f.name));
       const ids = await session.importFiles(
-        files,
+        audioFiles,
         target.trackId,
         snapBeat(target.beat, snap),
       );
-      selectClip(ids[0] ?? '');
+      if (ids.length) selectClip(ids[0]);
       setMessage(
         `${files.length} audio file${files.length === 1 ? '' : 's'} imported.`,
       );
     });
   const chooseWavs = (trackId: string | null) => {
-    importTarget.current = { trackId, beat };
+    importTarget.current = { trackId: project.tracks.find(t => t.id === trackId)?.kind === 'midi' ? null : trackId, beat };
     wavInput.current?.click();
   };
 
@@ -384,7 +401,7 @@ export default function Daw() {
 
   useEffect(() => {
     const keydown = (event: KeyboardEvent) => {
-      if (busyRef.current || help || settings || discard) return;
+      if (busyRef.current || help || settings || discard || signatureEdit) return;
       const target = event.target as HTMLElement;
       const typing = !!target.closest(
         'input, textarea, select, [role="combobox"], [role="slider"], [contenteditable="true"]',
@@ -396,7 +413,12 @@ export default function Daw() {
         save();
         return;
       }
-      if (typing) return;
+      if (typing || target.closest('[data-piano-roll], [role="menu"]')) return;
+      if (command && ['c','x','v','d'].includes(event.key.toLowerCase()) && selectedTrack) {
+        event.preventDefault();
+        const key = event.key.toLowerCase();
+        void run('Editing selection', async () => { if (key === 'v') session.paste(selectedTrack.id,beat); else if (key === 'd') session.duplicate(selectedTrack.id,selectedClipId || undefined); else session.copy(selectedTrack.id,selectedClipId || undefined,key === 'x'); }); return;
+      }
       if (command && event.key.toLowerCase() === 'o') {
         event.preventDefault();
         if (session.getSnapshot().dirty) setDiscard('open');
@@ -422,7 +444,7 @@ export default function Daw() {
       ) {
         event.preventDefault();
         if (engine.getSnapshot().status === 'playing') engine.pause();
-        else void run('Starting audio', () => engine.play());
+        else void run('Starting audio', () => session.play());
       }
       if (event.key === 'Escape') {
         engine.stop();
@@ -445,7 +467,7 @@ export default function Daw() {
     };
     window.addEventListener('keydown', keydown);
     return () => window.removeEventListener('keydown', keydown);
-  }, [session, engine, run, save, help, settings, discard, selectedClipId]);
+  }, [session, engine, run, save, help, settings, discard, selectedClipId, selectedTrack, beat, signatureEdit]);
 
   const startDrag = (
     event: ReactPointerEvent,
@@ -469,7 +491,7 @@ export default function Daw() {
       x: event.clientX,
       y: event.clientY,
       start: clip.startBeat,
-      duration: clip.durationSeconds,
+      duration: clip.kind === 'midi' ? beatsToSeconds(clip.lengthBeats ?? 4,project.tempo) : clip.durationSeconds,
       mode,
       moved: false,
     };
@@ -489,20 +511,9 @@ export default function Daw() {
       next.start = Math.min(100000, snapBeat(clip.startBeat + dx / zoom, snap));
       const row = event.currentTarget.closest<HTMLElement>('[data-track-id]');
       if (row) {
-        const sourceIndex = project.tracks.findIndex(
-          (track) => track.id === origin.trackId,
-        );
-        const targetIndex = Math.max(
-          0,
-          Math.min(
-            project.tracks.length - 1,
-            sourceIndex +
-              Math.floor(
-                (event.clientY - row.getBoundingClientRect().top) / ROW_HEIGHT,
-              ),
-          ),
-        );
-        next.targetId = project.tracks[targetIndex].id;
+        const targetRow = [...document.querySelectorAll<HTMLElement>('[data-track-id]')].find(element => { const rect = element.getBoundingClientRect(); return event.clientY >= rect.top && event.clientY < rect.bottom; });
+        const target = project.tracks.find(t => t.id === targetRow?.dataset.trackId);
+        if (target && (target.kind === 'midi') === (clip.kind === 'midi')) next.targetId = target.id;
       }
     } else {
       const endBeat = snapBeat(
@@ -510,11 +521,11 @@ export default function Daw() {
         snap,
       );
       const available =
-        session.assets.get(clip.assetId)!.buffer.duration - clip.offsetSeconds;
+        clip.kind === 'midi' ? beatsToSeconds(4096,project.tempo) : session.assets.get(clip.assetId)!.buffer.duration - clip.offsetSeconds;
       next.duration = Math.min(
         available,
         Math.max(
-          Math.min(0.01, available),
+          clip.kind === 'midi' ? beatsToSeconds(Math.max(.0625,...(clip.notes ?? []).map(n => n.start + n.length)),project.tempo) : Math.min(0.01, available),
           beatsToSeconds(endBeat - clip.startBeat, project.tempo),
         ),
       );
@@ -535,7 +546,7 @@ export default function Daw() {
       const updated = {
         ...original,
         startBeat: next.start,
-        durationSeconds: next.duration,
+        ...(original.kind === 'midi' ? { lengthBeats:secondsToBeats(next.duration,previous.tempo) } : { durationSeconds:next.duration }),
       };
       return {
         ...previous,
@@ -549,6 +560,23 @@ export default function Daw() {
       };
     });
     selectTrack(next.targetId);
+  };
+
+  const createMidi = (trackId: string, at: number) => { void run('Creating MIDI clip',async () => { selectClip(session.addMidiClip(trackId,at)); selectTrack(trackId); setRoll(true); }); };
+  const editActions = (track: Track, clip?: Clip): EditAction[] => [
+    ...(clip?.kind === 'midi' ? [{ label:'Open piano roll',action:() => { selectClip(clip.id); selectTrack(track.id); setRoll(true); } }] : []),
+    { label:clip ? 'Cut clip' : 'Cut track',action:() => session.copy(track.id,clip?.id,true) },
+    { label:clip ? 'Copy clip' : 'Copy track',action:() => session.copy(track.id,clip?.id) },
+    { label:'Paste at playhead',action:() => { void run('Pasting',async () => { session.paste(track.id,beat); }); } },
+    { label:clip ? 'Duplicate clip' : 'Duplicate track',action:() => { void run('Duplicating',async () => { session.duplicate(track.id,clip?.id); }); } },
+    ...(!clip ? [{ label:track.kind === 'midi' ? 'Import WAV / MP3 to new track?' : 'Import WAV / MP3 here?',action:() => chooseWavs(track.id) },...(track.kind === 'midi' ? [{ label:'Add MIDI clip at playhead',action:() => createMidi(track.id,snapBeat(beat,snap)) }] : [])] : []),
+    { label:clip ? 'Delete clip' : 'Delete track',destructive:true,action:() => session.remove(track.id,clip?.id) },
+  ].map(action => ({ ...action,disabled:!!busy }));
+  const saveSignature = () => {
+    if (!signatureEdit) return;
+    if (signatureEdit.id && markers.length >= 1024 && !markers.some(m => m.id === signatureEdit.id)) { setError('Maximum 1024 signature changes.'); return; }
+    if (signatureEdit.id && markers.some(m => m.id !== signatureEdit.id && m.beat === signatureEdit.beat)) { setError('A signature marker already exists at this position.'); return; }
+    session.edit(p => signatureEdit.id ? { ...p,signatureMarkers:[...(p.signatureMarkers ?? []).filter(m => m.id !== signatureEdit.id),signatureEdit as SignatureMarker].sort((a,b) => a.beat - b.beat) } : { ...p,timeSignature:signatureEdit.signature }); setSignatureEdit(null);
   };
 
   return (
@@ -649,7 +677,7 @@ export default function Daw() {
             onClick={() =>
               playing
                 ? engine.pause()
-                : void run('Starting audio', () => engine.play())
+                : void run('Starting audio', () => session.play())
             }
           >
             {playing ? (
@@ -660,7 +688,7 @@ export default function Daw() {
           </IconButton>
         </div>
         <div className="transport-time">
-          <span className="musical-time">{musicalPosition(beat)}</span>
+          <span className="musical-time">{signaturePosition(beat,project.timeSignature,markers)}</span>
           <span className="absolute-time">
             {formatTime(position, true)}
             <span>BARS · BEATS · TICKS</span>
@@ -680,10 +708,10 @@ export default function Daw() {
           />
           <span>BPM</span>
         </div>
-        <div className="signature">
-          <strong>4 / 4</strong>
+        <button className="signature" title="Edit project time signature" disabled={!!busy} onClick={() => setSignatureEdit({ beat:0,signature:project.timeSignature })}>
+          <strong>{currentSignature.join(' / ')}</strong>
           <span>SIGNATURE</span>
-        </div>
+        </button>
         <div className="transport-right">
           <span className={`engine-state ${playing ? 'running' : ''}`}>
             <span />
@@ -761,10 +789,12 @@ export default function Daw() {
               <Plus size={14} />
             </IconButton>
           </span>
+          <IconButton label="Add instrument track" disabled={!!busy} onClick={() => addTrack('midi')}><Piano size={17} /></IconButton>
+          <IconButton label="Import MIDI file" disabled={!!busy} onClick={() => midiInput.current?.click()}><FilePlus2 size={16} /></IconButton>
           <button
             className="button add-track"
             disabled={!!busy}
-            onClick={addTrack}
+            onClick={() => addTrack()}
           >
             <Plus size={14} />
             Track
@@ -832,7 +862,7 @@ export default function Daw() {
             </div>
             <div className="asset-list">
               {project.assets.length ? (
-                project.assets.map((asset) => (
+                project.assets.filter(asset => asset.kind !== 'soundfont').map((asset) => (
                   <button
                     className="asset-item"
                     draggable={!busy}
@@ -901,9 +931,9 @@ export default function Daw() {
               <div className="ruler-row">
                 <div className="track-corner">
                   <span>TRACKS</span>
-                  <span>4/4</span>
+                  <button className="marker-add" title="Add time signature change at playhead" disabled={!!busy} onClick={() => setSignatureEdit({ id:crypto.randomUUID(),beat:snapBeat(beat,snap),signature:currentSignature })}>+ {currentSignature.join('/')}</button>
                 </div>
-                <button
+                <EditMenu actions={[{ label:'Add time signature change here',disabled:!!busy,action:() => setSignatureEdit({ id:crypto.randomUUID(),beat:snapBeat(beat,snap),signature:currentSignature }) }]}><button
                   className="bar-ruler"
                   aria-label="Seek on bar ruler"
                   style={{ width: timelineWidth }}
@@ -924,14 +954,7 @@ export default function Daw() {
                   }}
                 >
                   <div className="bar-numbers">
-                    {Array.from(
-                      { length: Math.ceil(length / 4) },
-                      (_, index) => (
-                        <span key={index} style={{ left: index * zoom * 4 }}>
-                          {index + 1}
-                        </span>
-                      ),
-                    )}
+                    {bars.filter((_,i) => i % Math.max(1,Math.ceil(32 / (zoom * currentSignature[0] * 4 / currentSignature[1]))) === 0).map(bar => <span key={bar.bar} style={{ left:bar.beat * zoom }}>{bar.bar}</span>)}
                   </div>
                   <span className="ruler-beats">
                     {Array.from(
@@ -946,16 +969,17 @@ export default function Daw() {
                     aria-hidden="true"
                     style={{ left: beat * zoom }}
                   />
-                </button>
+                </button></EditMenu>
+                <div className="signature-markers" style={{ left:HEADER_WIDTH,width:timelineWidth }}>{markers.map(marker => <EditMenu key={marker.id} actions={[{ label:'Edit signature',action:() => setSignatureEdit(marker),disabled:!!busy },{ label:'Delete marker',destructive:true,disabled:!!busy,action:() => session.edit(p => ({ ...p,signatureMarkers:(p.signatureMarkers ?? []).filter(m => m.id !== marker.id) })) }]}><button className="signature-marker" style={{ left:marker.beat * zoom }} title={`Time signature ${marker.signature.join('/')} at beat ${marker.beat}`} disabled={!!busy} onClick={() => setSignatureEdit(marker)}>{marker.signature.join('/')}</button></EditMenu>)}</div>
               </div>
               {project.tracks.map((track, index) => (
-                <div
+                <EditMenu key={track.id} actions={() => editActions(track)}><div
                   className={`track-row ${track.id === selectedTrack?.id ? 'selected-track' : ''}`}
                   key={track.id}
                   data-track-id={track.id}
-                  style={{ '--track-color': track.color } as CSSProperties}
+                  style={{ '--track-color': track.color,height:rowHeight(track) } as CSSProperties}
                 >
-                  <div className="track-header">
+                  <div className="track-header" onContextMenu={() => { selectTrack(track.id); selectClip(''); }}>
                     <div className="track-name-row">
                       <button
                         className="track-number"
@@ -987,7 +1011,7 @@ export default function Daw() {
                           if (event.key === 'Enter') event.currentTarget.blur();
                         }}
                       />
-                      <AudioLines size={14} />
+                      {track.kind === 'midi' ? <Piano size={14} /> : <AudioLines size={14} />}
                     </div>
                     <div className="track-mixer-row">
                       <button
@@ -1031,6 +1055,7 @@ export default function Daw() {
                         <small>dB</small>
                       </button>
                     </div>
+                    <button className="track-resize" aria-label={`Resize ${track.name} height`} tabIndex={0} onPointerDown={e => { if (busy || e.button !== 0) return; e.currentTarget.setPointerCapture(e.pointerId); const value = { id:track.id,y:e.clientY,initial:rowHeight(track),height:rowHeight(track) }; resizeRef.current = value; setResize(value); }} onPointerMove={e => { const old = resizeRef.current; if (!old) return; const value = { ...old,height:Math.round(Math.max(64,Math.min(320,old.initial + e.clientY - old.y))) }; resizeRef.current = value; setResize(value); }} onPointerUp={() => { if (resizeRef.current) changeTrack(track.id,{ height:resizeRef.current.height }); resizeRef.current = null; setResize(null); }} onPointerCancel={() => { resizeRef.current = null; setResize(null); }} onKeyDown={e => { if (['ArrowUp','ArrowDown'].includes(e.key)) { e.preventDefault(); changeTrack(track.id,{ height:Math.max(64,Math.min(320,rowHeight(track) + (e.key === 'ArrowDown' ? 8 : -8))) }); } }} />
                   </div>
                   <div
                     className={`track-lane ${track.muted || (anySolo && !track.solo) ? 'lane-muted' : ''}`}
@@ -1046,6 +1071,7 @@ export default function Daw() {
                       const rect = event.currentTarget.getBoundingClientRect();
                       seek(snapBeat((event.clientX - rect.left) / zoom, snap));
                     }}
+                    onDoubleClick={event => { if (track.kind === 'midi' && event.target === event.currentTarget) createMidi(track.id,snapBeat((event.clientX - event.currentTarget.getBoundingClientRect().left) / zoom,snap)); }}
                     onDragOver={(event) => {
                       event.preventDefault();
                       event.dataTransfer.dropEffect = 'copy';
@@ -1073,29 +1099,27 @@ export default function Daw() {
                       const asset = session.assets.get(clip.assetId);
                       const moving = drag?.clipId === clip.id ? drag : null;
                       const start = moving?.start ?? clip.startBeat;
-                      const duration = moving?.duration ?? clip.durationSeconds;
-                      const rowDelta = moving
-                        ? project.tracks.findIndex(
-                            (item) => item.id === moving.targetId,
-                          ) - index
-                        : 0;
+                      const duration = moving?.duration ?? (clip.kind === 'midi' ? beatsToSeconds(clip.lengthBeats ?? 4,project.tempo) : clip.durationSeconds);
+                      const rowDelta = moving ? rowTop(moving.targetId) - rowTop(track.id) : 0;
                       return (
-                        <button
-                          key={clip.id}
+                        <EditMenu key={clip.id} actions={() => editActions(track,clip)}><button
                           className={`arrangement-clip ${selectedClipId === clip.id ? 'selected-clip' : ''} ${moving ? 'dragging-clip' : ''}`}
                           style={{
                             left: start * zoom,
+                            height:rowHeight(track) - 18,
                             width: Math.max(
                               12,
                               secondsToBeats(duration, project.tempo) * zoom,
                             ),
                             transform: rowDelta
-                              ? `translateY(${rowDelta * ROW_HEIGHT}px)`
+                              ? `translateY(${rowDelta}px)`
                               : undefined,
                           }}
                           aria-label={`${clip.name}, bar ${(start / 4 + 1).toFixed(2)}, ${duration.toFixed(2)} seconds`}
                           aria-pressed={selectedClipId === clip.id}
                           disabled={!!busy}
+                          onDoubleClick={() => { if (clip.kind === 'midi') setRoll(true); }}
+                          onContextMenu={() => { selectClip(clip.id); selectTrack(track.id); }}
                           onClick={() => {
                             selectClip(clip.id);
                             selectTrack(track.id);
@@ -1127,9 +1151,10 @@ export default function Daw() {
                           }}
                         >
                           <span className="clip-title">
-                            <AudioLines size={11} />
+                            {clip.kind === 'midi' ? <Piano size={11} /> : <AudioLines size={11} />}
                             <span>{clip.name}</span>
                           </span>
+                          {clip.kind === 'midi' && <svg className="clip-midi" viewBox="0 0 100 48" preserveAspectRatio="none" aria-hidden="true">{(clip.notes ?? []).map(n => <rect key={n.id} x={n.start / (clip.lengthBeats ?? 4) * 100} y={(127 - n.pitch) / 127 * 42} width={Math.max(.3,n.length / (clip.lengthBeats ?? 4) * 100)} height="1.6" />)}</svg>}
                           {asset && (
                             <ClipWave
                               buffer={asset.buffer}
@@ -1146,19 +1171,19 @@ export default function Daw() {
                           >
                             <GripVertical size={12} />
                           </span>
-                        </button>
+                        </button></EditMenu>
                       );
                     })}
-                    {!track.clips.length && index === 0 && (
+                    {!track.clips.length && (
                       <span className="lane-hint">
-                        Drop a WAV here, or import audio <Upload size={12} />
+                        {track.kind === 'midi' ? 'Double-click to create a MIDI clip' : 'Drop WAV / MP3, or right-click to import'} <Upload size={12} />
                       </span>
                     )}
                   </div>
-                </div>
+                </div></EditMenu>
               ))}
               <div className="track-add-row">
-                <button disabled={!!busy} onClick={addTrack}>
+                <button disabled={!!busy} onClick={() => addTrack()}>
                   <Plus size={14} />
                   Add audio track
                 </button>
@@ -1186,7 +1211,7 @@ export default function Daw() {
                 aria-hidden="true"
                 style={{
                   left: HEADER_WIDTH + beat * zoom,
-                  height: Math.max(1, project.tracks.length) * ROW_HEIGHT,
+                  height: project.tracks.reduce((sum,t) => sum + rowHeight(t),0),
                 }}
               >
                 <span />
@@ -1206,8 +1231,9 @@ export default function Daw() {
                 seek(Array.isArray(value) ? value[0] : value)
               }
             />
-            <span>{Math.ceil(length / 4)} bars</span>
+            <span>{Math.max(1,bars.length - 1)} bars</span>
           </div>
+          {roll && selectedClip?.kind === 'midi' && selectedTrack && <PianoRoll key={selectedClip.id} clip={selectedClip} track={selectedTrack} session={session} close={() => setRoll(false)} report={report} disabled={!!busy} />}
         </section>
 
         <aside className="clip-inspector" aria-label="Clip and track inspector">
@@ -1223,7 +1249,7 @@ export default function Daw() {
               <AudioLines size={19} />
             </div>
             <div>
-              <small>{selectedClip ? 'AUDIO CLIP' : 'AUDIO TRACK'}</small>
+              <small>{selectedClip ? (selectedClip.kind === 'midi' ? 'MIDI CLIP' : 'AUDIO CLIP') : (selectedTrack?.kind === 'midi' ? 'INSTRUMENT TRACK' : 'AUDIO TRACK')}</small>
               <strong>
                 {selectedClip?.name ??
                   selectedTrack?.name ??
@@ -1294,7 +1320,7 @@ export default function Daw() {
                 id="clip-track"
                 label="Track"
                 value={selectedTrack.id}
-                options={project.tracks.map((track) => ({
+                options={project.tracks.filter(t => t.kind !== 'midi').map((track) => ({
                   value: track.id,
                   label: track.name,
                 }))}
@@ -1390,6 +1416,7 @@ export default function Daw() {
               Add a track to begin your arrangement.
             </div>
           )}
+          {selectedTrack?.kind === 'midi' && <><div className="midi-clip-properties">{selectedClip?.kind === 'midi' && <><label className="text-field"><span>Clip name</span><input key={selectedClip.id + selectedClip.name} defaultValue={selectedClip.name} maxLength={160} disabled={!!busy} onBlur={e => { if (e.target.value.trim()) changeClip(selectedClip.id,{ name:e.target.value.trim() }); }} /></label><NumberField label="Start ? beats" value={selectedClip.startBeat} min={0} max={100000} step={snap ? 1 : .1} disabled={!!busy} onChange={startBeat => changeClip(selectedClip.id,{ startBeat })} /><NumberField label="Length ? beats" value={selectedClip.lengthBeats ?? 4} min={Math.max(.0625,...(selectedClip.notes ?? []).map(n => n.start + n.length))} max={4096} step={.25} disabled={!!busy} onChange={lengthBeats => changeClip(selectedClip.id,{ lengthBeats })} /><button className="button" onClick={() => setRoll(!roll)}><Piano size={14} />{roll ? 'Hide' : 'Open'} piano roll</button></>}<button className="button" disabled={!!busy} onClick={() => createMidi(selectedTrack.id,snapBeat(beat,snap))}><Plus size={13} />MIDI clip</button></div><InstrumentPanel key={selectedTrack.id} track={selectedTrack} session={session} busy={!!busy} run={run} /></>}
           <div className="inspector-spacer" />
           <div className="master-section">
             <div className="master-title">
@@ -1469,14 +1496,14 @@ export default function Daw() {
           <Keyboard size={14} />
           Shortcuts
         </button>
-        <span className="version">MNT / PROJECT 02</span>
+        <span className="version">MNT / MIDI 03</span>
       </footer>
       <input
         type="file"
         hidden
         multiple
         ref={wavInput}
-        accept=".wav,audio/wav,audio/x-wav"
+        accept=".wav,.mp3,.mid,.midi,audio/wav,audio/mpeg"
         aria-label="Import WAV files"
         onChange={(event) => {
           importWavs(
@@ -1506,6 +1533,8 @@ export default function Daw() {
           event.target.value = '';
         }}
       />
+      <input type="file" hidden ref={midiInput} accept=".mid,.midi" aria-label="Import MIDI file" onChange={event => { const file = event.target.files?.[0]; if (file) void run('Importing MIDI',async () => { selectClip(await session.importMidi(file,snapBeat(beat,snap))); setRoll(true); }); event.target.value = ''; }} />
+      <Dialog open={signatureEdit !== null} onOpenChange={open => { if (!open) setSignatureEdit(null); }}><DialogContent className="confirm-dialog"><DialogTitle>{signatureEdit?.id ? 'Time signature change' : 'Project time signature'}</DialogTitle><DialogDescription>Markers start a new bar at their position. Existing clips keep their quarter-note beat positions.</DialogDescription>{signatureEdit && <><div className="signature-fields"><NumberField label="Numerator" value={signatureEdit.signature[0]} min={1} max={32} onChange={n => setSignatureEdit({ ...signatureEdit,signature:[Math.round(n),signatureEdit.signature[1]] })} /><Choice id="signature-denominator" label="Denominator" value={String(signatureEdit.signature[1])} options={[1,2,4,8,16,32].map(n => ({ value:String(n),label:String(n) }))} onChange={d => setSignatureEdit({ ...signatureEdit,signature:[signatureEdit.signature[0],Number(d)] })} /></div>{signatureEdit.id && <NumberField label="Position ? quarter-note beats" value={signatureEdit.beat} min={0} max={100000} step={.25} onChange={beat => setSignatureEdit({ ...signatureEdit,beat })} />}<button className="button primary" onClick={saveSignature}>Apply signature</button></>}</DialogContent></Dialog>
       <AudioSettings
         engine={engine}
         open={settings}
@@ -1579,8 +1608,7 @@ export default function Daw() {
           </p>
           <p className="field-note">
             Projects embed the original WAVs. Tempo moves clip starts on the
-            beat grid; audio keeps its original speed. This version uses 4/4
-            time.
+            beat grid; audio keeps its original speed. MIDI follows project tempo; signature changes are available on the ruler.
           </p>
           <button className="button primary" onClick={() => setHelp(false)}>
             Back to the project

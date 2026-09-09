@@ -821,7 +821,7 @@ input::-webkit-inner-spin-button {
 .track-lane {
   position: relative;
   flex-shrink: 0;
-  height: 98px;
+  height: 100%;
   background-color: #1a242a;
   border-bottom: 1px solid #10191e;
   background-image:
@@ -1829,3 +1829,60 @@ kbd {
     transition-duration: 0.01ms !important;
   }
 }
+/* MIDI workspace */
+.track-header { padding-top: 10px; padding-bottom: 9px; }
+.track-mixer-row { margin-top: 8px; }
+.track-resize { position:absolute; bottom:0; left:0; right:0; height:6px; cursor:ns-resize; touch-action:none; z-index:6; }
+.track-resize:hover,.track-resize:focus-visible { background:#b9de9370; }
+.lane-hint { top:50%; transform:translateY(-50%); }
+.clip-midi { position:absolute; left:4px; top:25px; width:calc(100% - 8px); height:calc(100% - 29px); fill:currentColor; }
+.signature { cursor:pointer; border-radius:4px; }
+.signature:hover { background:#ffffff08; }
+.signature-markers { pointer-events:none; position:absolute; top:23px; height:19px; }
+.signature-marker { pointer-events:auto; position:absolute; border-left:2px solid #d8cb86; background:#4b4834; color:#e2dba8; font:9px var(--font-mono); padding:1px 5px; white-space:nowrap; height:17px; }
+.marker-add { font:10px var(--font-mono); color:#c3d3b3; }
+.signature-fields { display:grid; grid-template-columns:1fr 1fr; gap:12px; margin:12px 0; }
+.daw-context-menu { min-width:190px; background:#253137; color:#d4dfda; border:1px solid #475953; box-shadow:0 8px 32px #0007; font-size:12px; }
+.daw-context-menu [role='menuitem'] { min-height:31px; cursor:pointer; }
+.daw-context-menu [role='menuitem'][data-highlighted] { background:#3d5147; }
+.instrument-panel,.midi-clip-properties { padding:14px; border-top:1px solid #354239; display:flex; flex-direction:column; gap:12px; }
+.instrument-heading { display:flex; align-items:center; gap:7px; color:#bbcdb8; font-size:11px; }
+.instrument-heading span { margin-left:auto; font:8px var(--font-mono); color:#8caa9e; }
+.instrument-tabs { display:flex; border:1px solid #45564d; border-radius:4px; overflow:hidden; }
+.instrument-tabs button { flex:1; padding:7px 3px; color:#a0b2ab; font-size:10px; }
+.instrument-tabs button.active,.instrument-tabs button:hover { background:#3b5042; color:#dbebc9; }
+.synth-controls { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+.synth-controls input { min-width:0; width:100%; }
+.native-host-panel { display:flex; flex-direction:column; gap:10px; border:1px solid #46574c; padding:10px; border-radius:5px; }
+.native-host-panel > strong { display:flex; gap:6px; font-size:11px; }
+.native-host-panel input,.parameter-search { width:100%; background:#182227; border:1px solid #45544d; border-radius:4px; padding:7px; font-size:11px; }
+.plugin-parameters { display:flex; flex-direction:column; gap:10px; max-height:280px; overflow:auto; }
+.plugin-parameters .number-field > span { white-space:normal; overflow-wrap:anywhere; }
+.piano-roll { height:320px; max-height:55vh; flex-shrink:0; display:flex; flex-direction:column; background:#182328; border-top:1px solid #5c735b; min-width:0; }
+.piano-toolbar { display:flex; align-items:center; gap:8px; min-height:36px; padding:5px 10px; background:#26342f; font-size:11px; }
+.piano-toolbar > strong { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:160px; }
+.piano-toolbar > span { margin-right:auto; color:#889d92; font-size:9px; white-space:nowrap; }
+.piano-toolbar > button { display:inline-flex; gap:5px; align-items:center; border-radius:3px; padding:5px; color:#a6b8ae; white-space:nowrap; font-size:10px; }
+.piano-toolbar > button.active { color:#d2eab9; background:#455d3e; }
+.piano-toolbar > button.capture-active { color:#f0a89a; background:#624038; }
+.note-properties { display:flex; gap:8px; padding:6px 10px; border-bottom:1px solid #35423e; overflow-x:auto; flex-shrink:0; }
+.note-properties > * { min-width:65px; width:75px; flex-shrink:0; }
+.note-properties .setting-field { gap:4px; }
+.note-properties label,.note-properties .number-field > span { font-size:8px; }
+.note-properties input,.note-properties .setting-select { min-width:0; width:100%; min-height:25px; height:25px; padding:3px 6px; font-size:10px; }
+.piano-scroll { flex:1; min-height:0; overflow:auto; }
+.piano-surface { position:relative; min-width:100%; }
+.piano-keys { position:sticky; left:0; width:55px; height:100%; z-index:3; pointer-events:none; }
+.piano-keys button { position:absolute; left:0; width:55px; padding-right:6px; text-align:right; font:8px var(--font-mono); pointer-events:auto; touch-action:none; border-bottom:1px solid #26312b; }
+.white-key { background:#afbbb0; color:#344237; }
+.black-key { background:#35433e; color:#9faf9f; }
+.piano-keys button:active { background:#b9de93; color:#283421; }
+.note-grid { position:absolute; top:0; background-color:#182328; background-image:linear-gradient(to right,#7b958020 1px,transparent 1px),linear-gradient(to bottom,#89a19220 1px,transparent 1px),linear-gradient(to right,#c4d5b730 1px,transparent 1px); background-size:var(--note-step) 100%,100% 16px,64px 100%; cursor:crosshair; touch-action:none; }
+.midi-note { position:absolute; border:1px solid #8da970; border-radius:2px; color:#283a25; background:#a9ce89; cursor:grab; touch-action:none; text-align:left; padding:0 3px; overflow:hidden; font:8px var(--font-mono); }
+.midi-note.selected-note { border-color:#ecf9d2; box-shadow:0 0 0 1px #d5ecb9; }
+.midi-note > span { pointer-events:none; }
+.note-tail { position:absolute; right:0; top:0; bottom:0; width:7px; cursor:ew-resize; border-right:2px solid #526c43; }
+.piano-footer { display:flex; align-items:center; gap:10px; padding:5px 9px; font-size:8px; color:#869c90; min-height:26px; }
+.piano-footer > button { display:flex; align-items:center; gap:4px; color:#b9d1a3; white-space:nowrap; }
+.piano-footer > b { margin-left:auto; font:7px var(--font-mono); white-space:nowrap; }
+@media(max-width:850px) { .piano-toolbar > span,.piano-footer > span { display:none; } .piano-toolbar > strong { margin-right:auto; max-width:95px; } .piano-roll { height:300px; } }

@@ -1,10 +1,19 @@
 import { dbToGain, parseWav, type WavInfo } from './audio-utils.ts';
+import { type Instrument, defaultInstrument } from './midi.ts';
+import { synthVoice } from './synth.ts';
 
 type RoutableContext = AudioContext & {
   setSinkId?: (id: string) => Promise<void>;
 };
 export type AudioSettings = { sampleRate: number; bufferSize: number };
 export type PlaybackTrack = {
+  instrument?: Instrument;
+  notes?: {
+    pitch: number;
+    start: number;
+    duration: number;
+    velocity: number;
+  }[];
   id: string;
   volume: number;
   muted: boolean;
@@ -43,6 +52,9 @@ export class AudioEngine {
   private arrangement: PlaybackTrack[] | null = null;
   private scheduled: AudioBufferSourceNode[] = [];
   private trackGains: GainNode[] = [];
+  private synthStops: (() => void)[] = [];
+  private liveStops = new Set<() => void>();
+  private liveGains = new Map<string, GainNode>();
   private offset = 0;
   private startedAt = 0;
   private generation = 0;
@@ -156,7 +168,7 @@ export class AudioEngine {
     if (file.size > 150 * 1024 * 1024)
       throw new Error('Choose a WAV smaller than 150 MB.');
     const bytes = await file.arrayBuffer();
-    const wav = parseWav(bytes);
+    let wav = /\.mp3$/i.test(file.name) ? null : parseWav(bytes);
     const context = await this.ensureContext();
     let buffer: AudioBuffer;
     try {
@@ -167,6 +179,12 @@ export class AudioEngine {
       );
     }
     if (!buffer.length) throw new Error('This WAV contains no audio.');
+    wav ??= {
+      channels: buffer.numberOfChannels,
+      sampleRate: buffer.sampleRate,
+      bitDepth: 0,
+      frames: buffer.length,
+    };
     return { buffer, wav, bytes };
   }
 
@@ -189,6 +207,8 @@ export class AudioEngine {
     this.generation++;
     this.disconnectSource();
     this.arrangement = tracks;
+    for (const [id, gain] of this.liveGains)
+      gain.gain.value = this.liveLevel(id);
     this.offset = Math.min(position, duration);
     this.update({ duration, status: playing ? 'paused' : this.state.status });
     if (playing && this.offset < duration) this.startSource();
@@ -205,6 +225,21 @@ export class AudioEngine {
         track.muted || (anySolo && !track.solo) ? 0 : dbToGain(track.volume);
       gain.connect(this.master!);
       this.trackGains.push(gain);
+      for (const note of track.notes ?? []) {
+        const elapsed = Math.max(0, this.offset - note.start);
+        if (elapsed >= note.duration) continue;
+        this.synthStops.push(
+          synthVoice(
+            context,
+            gain,
+            track.instrument ?? defaultInstrument(),
+            note.pitch,
+            note.velocity,
+            origin + Math.max(0, note.start - this.offset),
+            note.duration - elapsed,
+          ),
+        );
+      }
       for (const clip of track.clips) {
         const elapsed = Math.max(0, this.offset - clip.start);
         if (elapsed >= clip.duration) continue;
@@ -238,6 +273,8 @@ export class AudioEngine {
   }
 
   private disconnectSource() {
+    this.synthStops.forEach((stop) => stop());
+    this.synthStops = [];
     this.scheduled.forEach((source) => {
       source.onended = null;
       source.stop();
@@ -304,6 +341,7 @@ export class AudioEngine {
   }
 
   stop() {
+    this.panic();
     this.generation++;
     this.disconnectSource();
     this.offset = 0;
@@ -369,6 +407,9 @@ export class AudioEngine {
       }
     }
     const old = this.context;
+    this.panic();
+    this.liveGains.forEach((gain) => gain.disconnect());
+    this.liveGains.clear();
     const oldStatus = this.state.status;
     this.pause();
     if (old) old.onstatechange = null;
@@ -385,7 +426,8 @@ export class AudioEngine {
   }
 
   readLevels(): [number, number] {
-    if (this.state.status !== 'playing') return [0, 0];
+    if (this.state.status !== 'playing' && this.liveStops.size === 0)
+      return [0, 0];
     return this.analysers.map((analyser, index) => {
       const data = this.meterData[index];
       analyser.getFloatTimeDomainData(data);
@@ -393,6 +435,49 @@ export class AudioEngine {
       for (const sample of data) peak = Math.max(peak, Math.abs(sample));
       return peak;
     }) as [number, number];
+  }
+  private liveLevel(id: string) {
+    const track = this.arrangement?.find((track) => track.id === id);
+    return !track ||
+      track.muted ||
+      (this.arrangement?.some((t) => t.solo) && !track.solo)
+      ? 0
+      : dbToGain(track.volume);
+  }
+  async liveOutput(trackId: string) {
+    const context = await this.ensureContext();
+    await context.resume();
+    let output = this.liveGains.get(trackId);
+    if (!output) {
+      output = context.createGain();
+      output.gain.value = this.liveLevel(trackId);
+      output.connect(this.master!);
+      this.liveGains.set(trackId, output);
+    }
+    return { context, output };
+  }
+  registerLive(stop: () => void) {
+    const release = () => {
+      stop();
+      this.liveStops.delete(release);
+    };
+    this.liveStops.add(release);
+    return release;
+  }
+  async previewSynth(
+    trackId: string,
+    instrument: Instrument,
+    pitch: number,
+    velocity: number,
+  ) {
+    const { context, output } = await this.liveOutput(trackId);
+    return this.registerLive(
+      synthVoice(context, output, instrument, pitch, velocity),
+    );
+  }
+  panic() {
+    this.liveStops.forEach((stop) => stop());
+    this.liveStops.clear();
   }
 
   async dispose() {

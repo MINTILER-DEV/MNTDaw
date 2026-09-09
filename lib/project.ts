@@ -1,4 +1,16 @@
 import { parseWav } from './audio-utils.ts';
+import {
+  type MidiNote,
+  type Instrument,
+  validateNotes,
+  validateInstrument,
+  defaultInstrument,
+} from './midi.ts';
+import {
+  type Signature,
+  type SignatureMarker,
+  validateSignature,
+} from './time-signatures.ts';
 
 export const TRACK_COLORS = [
   '#b9de93',
@@ -11,6 +23,9 @@ export const TRACK_COLORS = [
 export const MAX_AUDIO_BYTES = 96 * 1024 * 1024;
 export const MAX_PROJECT_BYTES = 140 * 1024 * 1024;
 export type Clip = {
+  kind?: 'audio' | 'midi';
+  notes?: MidiNote[];
+  lengthBeats?: number;
   id: string;
   name: string;
   assetId: string;
@@ -19,6 +34,9 @@ export type Clip = {
   durationSeconds: number;
 };
 export type Track = {
+  kind?: 'audio' | 'midi';
+  height?: number;
+  instrument?: Instrument;
   id: string;
   name: string;
   color: string;
@@ -29,15 +47,21 @@ export type Track = {
 };
 export type Project = {
   format: 'mnt-project';
-  version: 1;
+  version: 1 | 2;
   id: string;
   name: string;
   tempo: number;
-  timeSignature: [4, 4];
+  timeSignature: Signature;
+  signatureMarkers?: SignatureMarker[];
   positionBeats: number;
   master: { volume: number; muted: boolean };
   tracks: Track[];
-  assets: { id: string; name: string }[];
+  assets: {
+    id: string;
+    name: string;
+    kind?: 'audio' | 'soundfont';
+    encoding?: 'wav' | 'mp3';
+  }[];
 };
 export const beatsToSeconds = (beats: number, tempo: number) =>
   (beats * 60) / tempo;
@@ -46,7 +70,10 @@ export const secondsToBeats = (seconds: number, tempo: number) =>
 export const snapBeat = (beat: number, snap: boolean) =>
   Math.max(0, snap ? Math.round(beat) : beat);
 export const clipEndBeat = (clip: Clip, tempo: number) =>
-  clip.startBeat + secondsToBeats(clip.durationSeconds, tempo);
+  clip.startBeat +
+  (clip.kind === 'midi'
+    ? (clip.lengthBeats ?? 4)
+    : secondsToBeats(clip.durationSeconds, tempo));
 export function projectLength(project: Project) {
   const end = Math.max(
     0,
@@ -60,10 +87,14 @@ export function musicalPosition(beats: number) {
   const safe = Math.max(0, beats);
   return `${String(Math.floor(safe / 4) + 1).padStart(3, '0')}.${Math.floor(safe % 4) + 1}.${String(Math.floor((safe % 1) * 960)).padStart(3, '0')}`;
 }
-export function newTrack(index: number): Track {
+export function newTrack(
+  index: number,
+  kind: 'audio' | 'midi' = 'audio',
+): Track {
   return {
     id: crypto.randomUUID(),
-    name: `Audio ${index + 1}`,
+    name: `${kind === 'midi' ? 'Instrument' : 'Audio'} ${index + 1}`,
+    ...(kind === 'midi' ? { kind, instrument: defaultInstrument() } : {}),
     color: TRACK_COLORS[index % TRACK_COLORS.length],
     volume: 0,
     muted: false,
@@ -74,7 +105,7 @@ export function newTrack(index: number): Track {
 export function newProject(): Project {
   return {
     format: 'mnt-project',
-    version: 1,
+    version: 2,
     id: crypto.randomUUID(),
     name: 'Untitled project',
     tempo: 120,
@@ -159,16 +190,32 @@ export function parseProject(json: string): {
   } catch {
     throw new Error('This is not a readable MNT project file.');
   }
-  if (input.format !== 'mnt-project' || input.version !== 1)
+  if (input.format !== 'mnt-project' || (input.version !== 1 && input.version !== 2))
     throw new Error('Unsupported project format or version.');
-  const signature = input.timeSignature;
-  if (
-    !Array.isArray(signature) ||
-    signature.length !== 2 ||
-    signature[0] !== 4 ||
-    signature[1] !== 4
-  )
-    throw new Error('This version supports 4/4 projects.');
+  const signature = validateSignature(input.timeSignature);
+  const markers =
+    input.signatureMarkers === undefined
+      ? undefined
+      : list(input.signatureMarkers, 1024)
+          .map((value) => {
+            const marker = object(value);
+            return {
+              id: text(marker.id, 'marker ID'),
+              beat: number(marker.beat, 'marker position', 0, 100000),
+              signature: validateSignature(marker.signature),
+            };
+          })
+          .sort((a, b) => a.beat - b.beat);
+  if (markers) {
+    unique(
+      markers.map((m) => m.id),
+      'marker',
+    );
+    unique(
+      markers.map((m) => String(m.beat)),
+      'marker position',
+    );
+  }
   const audio = new Map<string, ArrayBuffer>();
   let total = 0,
     decodedEstimate = 0;
@@ -187,13 +234,26 @@ export function parseProject(json: string): {
       throw new Error('Project audio exceeds 96 MB.');
     const binary = atob(asset.data);
     const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0)).buffer;
-    const wav = parseWav(bytes);
-    decodedEstimate += wav.frames * wav.channels * 4;
+    if (asset.kind === 'soundfont') {
+      if (
+        bytes.byteLength < 12 ||
+        String.fromCharCode(...new Uint8Array(bytes, 8, 4)) !== 'sfbk'
+      )
+        throw new Error('Invalid SoundFont file.');
+    } else if (asset.encoding !== 'mp3') {
+      const wav = parseWav(bytes);
+      decodedEstimate += wav.frames * wav.channels * 4;
+    }
     if (decodedEstimate > 384 * 1024 * 1024)
       throw new Error('Project audio exceeds the decoded memory limit.');
     if (audio.has(id)) throw new Error('Duplicate asset IDs in project.');
     audio.set(id, bytes);
-    return { id, name };
+    return {
+      id,
+      name,
+      ...(asset.kind === 'soundfont' ? { kind: 'soundfont' as const } : {}),
+      ...(asset.encoding === 'mp3' ? { encoding: 'mp3' as const } : {}),
+    };
   });
   const tracks = list(input.tracks, 64).map((value) => {
     const track = object(value);
@@ -202,8 +262,27 @@ export function parseProject(json: string): {
       throw new Error('Invalid track color.');
     const clips = list(track.clips, 2048).map((value) => {
       const clip = object(value);
+      if (clip.kind === 'midi') {
+        const lengthBeats = number(
+          clip.lengthBeats,
+          'MIDI clip length',
+          0.0625,
+          4096,
+        );
+        return {
+          id: text(clip.id, 'clip ID'),
+          name: text(clip.name, 'clip name'),
+          kind: 'midi' as const,
+          assetId: '',
+          startBeat: number(clip.startBeat, 'clip position', 0, 100000),
+          offsetSeconds: 0,
+          durationSeconds: 1,
+          lengthBeats,
+          notes: validateNotes(clip.notes, lengthBeats),
+        };
+      }
       const assetId = text(clip.assetId, 'asset reference');
-      if (!audio.has(assetId))
+      if (!audio.has(assetId) || assets.find(a => a.id === assetId)?.kind === 'soundfont')
         throw new Error('A clip references missing audio.');
       return {
         id: text(clip.id, 'clip ID'),
@@ -227,6 +306,15 @@ export function parseProject(json: string): {
       muted: bool(track.muted),
       solo: bool(track.solo),
       clips,
+      ...(track.height !== undefined
+        ? { height: number(track.height, 'track height', 64, 320) }
+        : {}),
+      ...(track.kind === 'midi'
+        ? {
+            kind: 'midi' as const,
+            instrument: validateInstrument(track.instrument),
+          }
+        : {}),
     };
   });
   unique(
@@ -243,11 +331,12 @@ export function parseProject(json: string): {
   const master = object(input.master);
   const project: Project = {
     format: 'mnt-project',
-    version: 1,
+    version: input.version as 1 | 2,
     id: text(input.id, 'project ID'),
     name: text(input.name, 'project name'),
     tempo: number(input.tempo, 'tempo', 20, 300),
-    timeSignature: [4, 4],
+    timeSignature: signature,
+    ...(markers ? { signatureMarkers: markers } : {}),
     positionBeats: number(input.positionBeats, 'playhead position', 0, 200000),
     master: {
       volume: number(master.volume, 'master volume', -60, 6),
@@ -256,6 +345,27 @@ export function parseProject(json: string): {
     tracks,
     assets,
   };
+  for (const track of tracks) {
+    if (
+      track.instrument?.type === 'soundfont' &&
+      !assets.some(
+        (asset) =>
+          asset.id === track.instrument?.soundfontId &&
+          asset.kind === 'soundfont',
+      )
+    )
+      throw new Error('Missing SoundFont asset.');
+    if (
+      track.clips.some((clip) => clip.kind === 'midi') &&
+      track.kind !== 'midi'
+    )
+      throw new Error('MIDI clips need an instrument track.');
+    if (
+      track.clips.some((clip) => clip.kind !== 'midi') &&
+      track.kind === 'midi'
+    )
+      throw new Error('Audio clips need an audio track.');
+  }
   if (project.positionBeats > projectLength(project))
     throw new Error('Saved playhead is outside the project timeline.');
   return { project, audio };

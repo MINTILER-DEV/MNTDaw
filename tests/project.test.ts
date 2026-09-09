@@ -76,7 +76,7 @@ void test('project round-trip preserves Unicode, clip offsets, tempo, and exact 
 void test('project decoder rejects unknown versions, missing media, duplicate IDs, and invalid timing', () => {
   assert.throws(() => parseProject('{'), /readable/);
   assert.throws(
-    () => parseProject(json().replace('"version":1', '"version":2')),
+    () => parseProject(json().replace('"version":2', '"version":99')),
     /version/,
   );
   assert.throws(
