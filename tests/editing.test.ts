@@ -230,6 +230,95 @@ void test('note clipboard survives switching clips and stores an independent sna
   assert.deepEqual(session.copiedNotes(), []);
 });
 
+void test('playhead paste follows the live tempo map, snaps forward, and extends the clip in one undo step', async () => {
+  const session = new ProjectSession();
+  const track = newTrack(2, 'midi');
+  session.edit((p) => ({
+    ...p,
+    tracks: [...p.tracks, track],
+    tempoMarkers: [{ id: 'slow', beat: 4, tempo: 60 }],
+  }));
+  const id = session.addMidiClip(track.id, 4);
+  session.copyNotes(chord());
+  await session.play();
+  FakeContext.instances[0].currentTime = 5.1; // Global beat 7.1, local beat 3.1.
+  const ids = session.pasteNotesAtPlayhead(track.id, id, 0.25);
+  const pasted = session.getSnapshot().project.tracks[2].clips[0];
+  assert.deepEqual(
+    pasted.notes!.map((n) => n.start),
+    [3.25, 3.75, 4.25],
+  );
+  assert.deepEqual(
+    pasted.notes!.map((n) => [n.pitch, n.velocity, n.length]),
+    chord().map((n) => [n.pitch, n.velocity, n.length]),
+  );
+  assert.deepEqual(
+    pasted.notes!.map((n) => n.id),
+    ids,
+  );
+  assert.equal(pasted.lengthBeats, 5.75);
+  assert.equal(session.engine.getSnapshot().status, 'playing');
+  session.undo();
+  assert.equal(session.getSnapshot().project.tracks[2].clips[0].lengthBeats, 4);
+  assert.deepEqual(session.getSnapshot().project.tracks[2].clips[0].notes, []);
+  session.redo();
+  assert.deepEqual(session.getSnapshot().project.tracks[2].clips[0], pasted);
+  assert.deepEqual(
+    parseProject(session.serialize()).project.tracks[2].clips[0],
+    pasted,
+  );
+});
+
+void test('playhead paste respects free timing and triplets and never moves a phrase backward to fit', () => {
+  const session = new ProjectSession();
+  const track = newTrack(2, 'midi');
+  session.edit((p) => ({ ...p, tracks: [...p.tracks, track] }));
+  const id = session.addMidiClip(track.id, 4);
+  session.copyNotes(chord());
+  session.engine.seek(beatsToSeconds(2, 120));
+  session.pasteNotesAtPlayhead(track.id, id, 0);
+  assert.equal(
+    session.getSnapshot().project.tracks[2].clips[0].notes![0].start,
+    0,
+  );
+  session.engine.seek(beatsToSeconds(8.125, 120));
+  const first = session.pasteNotesAtPlayhead(track.id, id, 0)[0];
+  assert.equal(
+    session
+      .getSnapshot()
+      .project.tracks[2].clips[0].notes!.find((n) => n.id === first)!.start,
+    4.125,
+  );
+  const second = session.pasteNotesAtPlayhead(track.id, id, 1 / 3)[0];
+  assert.ok(
+    Math.abs(
+      session
+        .getSnapshot()
+        .project.tracks[2].clips[0].notes!.find((n) => n.id === second)!.start -
+        13 / 3,
+    ) < 1e-9,
+  );
+  assert.deepEqual(session.copiedNotes(), chord());
+});
+
+void test('paste beyond the MIDI length limit leaves clip, playhead, clipboard and undo history intact', () => {
+  const session = new ProjectSession();
+  const track = newTrack(2, 'midi');
+  session.edit((p) => ({
+    ...p,
+    tracks: [...p.tracks, track],
+    tempoMarkers: [{ id: 'later', beat: 5000, tempo: 120 }],
+  }));
+  const id = session.addMidiClip(track.id, 0);
+  session.copyNotes(chord());
+  session.engine.seek(beatsToSeconds(4095, 120));
+  const before = session.getSnapshot();
+  assert.throws(() => session.pasteNotesAtPlayhead(track.id, id, 0.25), /4096/);
+  assert.equal(session.getSnapshot(), before);
+  assert.equal(session.engine.position, beatsToSeconds(4095, 120));
+  assert.deepEqual(session.copiedNotes(), chord());
+});
+
 void test('audio left-edge trims keep the end fixed and can recover earlier source audio', () => {
   const original = audio();
   const shorter = trimClip(original, 'left', 6, 120, 10);

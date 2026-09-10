@@ -17,7 +17,7 @@ import {
 } from './project.ts';
 import { defaultInstrument } from './midi.ts';
 import type { MidiNote } from './midi.ts';
-import { splitClip } from './editing.ts';
+import { splitClip, pasteNotes } from './editing.ts';
 
 export type AudioAsset = Awaited<ReturnType<AudioEngine['decodeFile']>>;
 type SessionSnapshot = {
@@ -43,6 +43,50 @@ export class ProjectSession {
   }
   copiedNotes() {
     return structuredClone(this.noteClipboard);
+  }
+  pasteNotesAtPlayhead(trackId: string, clipId: string, division: number) {
+    const project = this.state.project;
+    const clip = project.tracks
+      .find((t) => t.id === trackId)
+      ?.clips.find((c) => c.id === clipId);
+    if (clip?.kind !== 'midi' || !this.noteClipboard.length) return [];
+    if ((clip.notes?.length ?? 0) + this.noteClipboard.length > 8192)
+      throw new Error('Maximum 8192 notes per clip.');
+    const local = Math.max(
+      0,
+      secondsToBeats(this.engine.position, project) - clip.startBeat,
+    );
+    const at =
+      division > 0 ? Math.ceil(local / division - 1e-9) * division : local;
+    const first = Math.min(...this.noteClipboard.map((n) => n.start));
+    const span =
+      Math.max(...this.noteClipboard.map((n) => n.start + n.length)) - first;
+    const lengthBeats = Math.max(clip.lengthBeats ?? 4, at + span);
+    if (lengthBeats > 4096)
+      throw new Error(
+        'Pasting here exceeds the 4096-beat clip limit. Move the playhead earlier or use another clip.',
+      );
+    const created = pasteNotes(this.noteClipboard, at, lengthBeats);
+    this.edit((p) => ({
+      ...p,
+      tracks: p.tracks.map((t) =>
+        t.id === trackId
+          ? {
+              ...t,
+              clips: t.clips.map((c) =>
+                c.id === clipId
+                  ? {
+                      ...c,
+                      lengthBeats,
+                      notes: [...(c.notes ?? []), ...created],
+                    }
+                  : c,
+              ),
+            }
+          : t,
+      ),
+    }));
+    return created.map((n) => n.id);
   }
   split(trackId: string, clipId: string, beat: number) {
     const project = this.state.project;
