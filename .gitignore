@@ -37,3 +37,8 @@ next-env.d.ts
 /outputs/
 /work/
 *.tsbuildinfo
+
+# native companion
+.venv/
+__pycache__/
+*.pyc

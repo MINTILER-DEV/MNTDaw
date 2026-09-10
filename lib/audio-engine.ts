@@ -44,6 +44,7 @@ export type AudioSnapshot = {
 
 export class AudioEngine {
   private context: RoutableContext | null = null;
+  private initializing: Promise<RoutableContext> | null = null;
   private master: GainNode | null = null;
   private splitter: ChannelSplitterNode | null = null;
   private analysers: AnalyserNode[] = [];
@@ -159,9 +160,17 @@ export class AudioEngine {
   }
 
   private async ensureContext() {
-    if (!this.context)
-      this.attachContext(await this.createContext(this.state.settings));
-    return this.context!;
+    if (this.context) return this.context;
+    if (!this.initializing)
+      this.initializing = this.createContext(this.state.settings)
+        .then((context) => {
+          this.attachContext(context);
+          return context;
+        })
+        .finally(() => {
+          this.initializing = null;
+        });
+    return this.initializing;
   }
 
   async decodeFile(file: File) {
@@ -175,10 +184,10 @@ export class AudioEngine {
       buffer = await context.decodeAudioData(bytes.slice(0));
     } catch {
       throw new Error(
-        'This WAV could not be decoded. Try an uncompressed PCM or floating-point WAV.',
+        'This audio could not be decoded. Try a standard MP3, PCM WAV, or floating-point WAV.',
       );
     }
-    if (!buffer.length) throw new Error('This WAV contains no audio.');
+    if (!buffer.length) throw new Error('This file contains no audio.');
     wav ??= {
       channels: buffer.numberOfChannels,
       sampleRate: buffer.sampleRate,

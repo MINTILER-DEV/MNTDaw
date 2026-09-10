@@ -22,6 +22,7 @@ export function signatureBars(
   initial: Signature,
   markers: SignatureMarker[],
   end: number,
+  minimumSpacing = 0,
 ) {
   const changes = [...markers].sort((a, b) => a.beat - b.beat);
   const bars: { beat: number; bar: number; signature: Signature }[] = [];
@@ -32,11 +33,15 @@ export function signatureBars(
   while (beat < end + 0.00001 && bars.length < 100000) {
     while (index < changes.length && changes[index].beat <= beat + 0.00001)
       signature = changes[index++].signature;
-    bars.push({ beat, bar: bar++, signature });
-    beat = Math.min(
-      beat + barBeats(signature),
-      changes[index]?.beat ?? Infinity,
+    bars.push({ beat, bar, signature });
+    const size = barBeats(signature);
+    const nextChange = changes[index]?.beat ?? Infinity;
+    const stride = Math.min(
+      Math.max(1, Math.ceil(minimumSpacing / size)),
+      Math.ceil((nextChange - beat) / size - 1e-9),
     );
+    bar += stride;
+    beat = Math.min(beat + size * stride, nextChange);
   }
   return bars;
 }
@@ -45,8 +50,20 @@ export function signaturePosition(
   signature: Signature,
   markers: SignatureMarker[] = [],
 ) {
-  const bars = signatureBars(signature, markers, beat);
-  const current = bars.at(-1)!;
-  const local = (Math.max(0, beat - current.beat) * current.signature[1]) / 4;
-  return `${String(current.bar).padStart(3, '0')}.${Math.floor(local) + 1}.${String(Math.floor((local % 1) * 960)).padStart(3, '0')}`;
+  beat = Math.max(0, beat);
+  let cursor = 0,
+    bar = 1;
+  for (const marker of [...markers].sort((a, b) => a.beat - b.beat)) {
+    if (marker.beat > beat) break;
+    bar += Math.ceil((marker.beat - cursor) / barBeats(signature) - 1e-9);
+    cursor = marker.beat;
+    signature = marker.signature;
+  }
+  const fullBars = Math.floor((beat - cursor) / barBeats(signature) + 1e-9);
+  bar += fullBars;
+  const local = Math.max(
+    0,
+    ((beat - cursor - fullBars * barBeats(signature)) * signature[1]) / 4,
+  );
+  return `${String(bar).padStart(3, '0')}.${Math.floor(local) + 1}.${String(Math.floor((local % 1) * 960)).padStart(3, '0')}`;
 }

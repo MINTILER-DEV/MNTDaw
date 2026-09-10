@@ -14,12 +14,12 @@ python -m venv .venv
 For a Vercel deployment, pass its exact origin:
 
 ```sh
-python native-host/server.py --origin https://your-project.vercel.app --plugin-dir "C:/Program Files/Common Files/VST3"
+.venv\Scripts\python native-host/server.py --origin https://your-project.vercel.app --plugin-dir "C:/Program Files/Common Files/VST3"
 ```
 
-Select an instrument track in MNT, choose **VST3 · native host**, paste the pairing token from the host console, and connect. Choose a discovered plugin. Its exposed parameters are editable as normalized 0–1 values and are saved in the project. Play prepares each MIDI clip through the selected plugin. Changed notes, tempo, or parameters invalidate that clip's render cache. Native plugin paths, binaries, external sample libraries, proprietary preset blobs, and the pairing token are not embedded in `.mnt` files. The same plugin must be installed when reopening the project.
+Select an instrument track in MNT, choose **VST3 · native host**, paste the pairing token from the host console, and connect. Choose a discovered plugin. Its exposed parameters are editable as normalized 0–1 values and are saved in the project. Play prepares each MIDI clip through the selected plugin. Changed notes, tempo, or parameters invalidate that clip's render cache. Native plugin paths, binaries, external sample libraries, proprietary preset blobs, and the pairing token are not embedded in `.mnt` files. The same plugin must be installed when reopening the project. Plugin IDs currently depend on the local install path; if the path changes, select the plugin again. Parameters are applied on the next render.
 
-The host binds only to loopback, requires an exact allowed Origin and a per-run token, and only loads plugins discovered in the configured folders. Plugins run in isolated subprocesses with a timeout. A VST3 plugin is native software: only install plugins you trust. No upload endpoint accepts native code. Requests are limited to 4 MB, 8192 notes, and 5 minutes of audio.
+The host binds only to loopback, requires an exact allowed Origin and a per-run token, and only loads plugins discovered in the configured folders. Plugins run in isolated subprocesses with a timeout. A VST3 plugin is native software: only install plugins you trust. No upload endpoint accepts native code. Requests are limited to 4 MB, 8192 notes, and 5 minutes of audio. Pedalboard is pinned in requirements.txt and remains an optional native dependency; no Python runtime is included in the web build.
 
 Browsers may request local-network permission or block a hosted HTTPS page from reaching a local HTTP service. If blocked, run the DAW locally or use a trusted local HTTPS setup. No VST3 server code runs on Vercel. Plugin compatibility varies; native plugin UIs and live MIDI streaming are not provided in this version.
 

@@ -47,6 +47,36 @@ class FakeSource extends FakeNode {
     this.stopped = true;
   }
 }
+export class FakeParam {
+  value = 0;
+  events: { type: string; value?: number; time: number }[] = [];
+  setTargetAtTime(value: number) {
+    this.value = value;
+  }
+  setValueAtTime(value: number, time: number) {
+    this.events.push({ type: 'set', value, time });
+  }
+  linearRampToValueAtTime(value: number, time: number) {
+    this.events.push({ type: 'ramp', value, time });
+  }
+  cancelScheduledValues(time: number) {
+    this.events = this.events.filter((e) => e.time < time);
+  }
+}
+class FakeOscillator extends FakeNode {
+  type = 'sine';
+  frequency = new FakeParam();
+  detune = new FakeParam();
+  when = 0;
+  stopAt = Infinity;
+  onended: (() => void) | null = null;
+  start(when = 0) {
+    this.when = when;
+  }
+  stop(at = 0) {
+    this.stopAt = at;
+  }
+}
 export class FakeContext {
   static instances: FakeContext[] = [];
   static rejectSampleRate = 0;
@@ -58,18 +88,26 @@ export class FakeContext {
   outputLatency = 0.02;
   destination = new FakeNode();
   sources: FakeSource[] = [];
+  oscillators: FakeOscillator[] = [];
+  createOscillator() {
+    const oscillator = new FakeOscillator();
+    this.oscillators.push(oscillator);
+    return oscillator;
+  }
+  createBiquadFilter() {
+    return Object.assign(new FakeNode(), {
+      type: 'lowpass',
+      frequency: new FakeParam(),
+      Q: new FakeParam(),
+    });
+  }
   onstatechange: (() => void) | null = null;
   sinkId = '';
   master = Object.assign(new FakeNode(), {
     channelCount: 0,
     channelCountMode: '',
     channelInterpretation: '',
-    gain: {
-      value: 0,
-      setTargetAtTime(value: number) {
-        this.value = value;
-      },
-    },
+    gain: new FakeParam(),
   });
   gains: (typeof this.master)[] = [];
   resumeGate: Promise<void> | null = null;
@@ -87,12 +125,7 @@ export class FakeContext {
             channelCount: 0,
             channelCountMode: '',
             channelInterpretation: '',
-            gain: {
-              value: 0,
-              setTargetAtTime(value: number) {
-                this.value = value;
-              },
-            },
+            gain: new FakeParam(),
           });
     this.gains.push(gain);
     return gain;

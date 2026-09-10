@@ -1,16 +1,10 @@
 import { Midi } from '@tonejs/midi';
-import { BasicMIDI, SoundBankLoader } from 'spessasynth_core';
+import { BasicMIDI } from 'spessasynth_core';
 import { WorkletSynthesizer } from 'spessasynth_lib';
 import processorUrl from 'spessasynth_lib/dist/spessasynth_processor.min.js?url';
 import type { Instrument, MidiNote } from './midi';
 import { nativeHost } from './native-host';
 
-export const inspectSoundfont = (bytes: ArrayBuffer) =>
-  SoundBankLoader.fromArrayBuffer(bytes).presets.map((preset) => ({
-    name: preset.name,
-    program: preset.program,
-    bank: preset.bankMSB * 128 + preset.bankLSB,
-  }));
 export async function renderInstrument(
   instrument: Instrument,
   notes: MidiNote[],
@@ -78,9 +72,19 @@ export async function renderInstrument(
   }
 }
 
-const live = new WeakMap<AudioNode, { key: string; ready: Promise<WorkletSynthesizer> }>();
+const live = new WeakMap<
+  AudioNode,
+  { key: string; ready: Promise<WorkletSynthesizer> }
+>();
 const worklets = new WeakMap<AudioContext, Promise<void>>();
-export async function soundfontPreview(context: AudioContext, output: AudioNode, instrument: Instrument, bank: ArrayBuffer, pitch: number, velocity: number) {
+export async function soundfontPreview(
+  context: AudioContext,
+  output: AudioNode,
+  instrument: Instrument,
+  bank: ArrayBuffer,
+  pitch: number,
+  velocity: number,
+) {
   const key = `${instrument.soundfontId}:${instrument.program}:${instrument.bank}`;
   let entry = live.get(output);
   if (entry?.key !== key) {
@@ -88,24 +92,34 @@ export async function soundfontPreview(context: AudioContext, output: AudioNode,
     const ready = (async () => {
       if (old) (await old.ready.catch(() => null))?.destroy();
       let worklet = worklets.get(context);
-      if (!worklet) { worklet = context.audioWorklet.addModule(processorUrl); worklets.set(context,worklet); }
+      if (!worklet) {
+        worklet = context.audioWorklet.addModule(processorUrl);
+        worklets.set(context, worklet);
+      }
       await worklet;
       const synth = new WorkletSynthesizer(context);
       try {
         await synth.isReady;
-        await synth.soundBankManager.addSoundBank(bank.slice(0),'live');
-        synth.controllerChange(0,0,Math.floor((instrument.bank ?? 0) / 128));
-        synth.controllerChange(0,32,(instrument.bank ?? 0) % 128);
-        synth.programChange(0,instrument.program ?? 0);
+        await synth.soundBankManager.addSoundBank(bank.slice(0), 'live');
+        synth.controllerChange(0, 0, Math.floor((instrument.bank ?? 0) / 128));
+        synth.controllerChange(0, 32, (instrument.bank ?? 0) % 128);
+        synth.programChange(0, instrument.program ?? 0);
         synth.connect(output);
         return synth;
-      } catch (error) { synth.destroy(); throw error; }
+      } catch (error) {
+        synth.destroy();
+        throw error;
+      }
     })();
-    entry = { key,ready }; live.set(output,entry);
+    entry = { key, ready };
+    live.set(output, entry);
   }
   const current = entry;
-  const synth = await current.ready.catch(error => { if (live.get(output) === current) live.delete(output); throw error; });
+  const synth = await current.ready.catch((error) => {
+    if (live.get(output) === current) live.delete(output);
+    throw error;
+  });
   if (live.get(output) !== current) return () => {};
-  synth.noteOn(0,pitch,velocity);
-  return () => synth.noteOff(0,pitch);
+  synth.noteOn(0, pitch, velocity);
+  return () => synth.noteOff(0, pitch);
 }

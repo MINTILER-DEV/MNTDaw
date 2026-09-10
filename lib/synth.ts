@@ -33,8 +33,10 @@ export function synthVoice(
   filter.connect(gain);
   gain.connect(output);
   gain.gain.setValueAtTime(0, when);
-  gain.gain.linearRampToValueAtTime(level, when + attack);
-  gain.gain.linearRampToValueAtTime(level * sustain, when + attack + decay);
+  if (duration === undefined || duration >= attack)
+    gain.gain.linearRampToValueAtTime(level, when + attack);
+  if (duration === undefined || duration >= attack + decay)
+    gain.gain.linearRampToValueAtTime(level * sustain, when + attack + decay);
   let stopped = false;
   const stop = (at = context.currentTime, force = false) => {
     if (stopped) return;
@@ -53,6 +55,7 @@ export function synthVoice(
     oscillator.stop(end + (force ? 0.01 : release + 0.01));
   };
   oscillator.onended = () => {
+    stopped = true;
     oscillator.disconnect();
     filter.disconnect();
     gain.disconnect();
@@ -68,7 +71,7 @@ export function synthVoice(
           ? level + ((level * sustain - level) * (elapsed - attack)) / decay
           : level * sustain;
     gain.gain.cancelScheduledValues(end);
-    gain.gain.setValueAtTime(Math.max(0, envelope), end);
+    gain.gain.linearRampToValueAtTime(Math.max(0, envelope), end);
     gain.gain.linearRampToValueAtTime(0, end + release);
     oscillator.stop(end + release + 0.01);
   }

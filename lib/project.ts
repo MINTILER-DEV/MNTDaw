@@ -77,6 +77,7 @@ export const clipEndBeat = (clip: Clip, tempo: number) =>
 export function projectLength(project: Project) {
   const end = Math.max(
     0,
+    ...(project.signatureMarkers ?? []).map((marker) => marker.beat),
     ...project.tracks.flatMap((track) =>
       track.clips.map((clip) => clipEndBeat(clip, project.tempo)),
     ),
@@ -190,7 +191,10 @@ export function parseProject(json: string): {
   } catch {
     throw new Error('This is not a readable MNT project file.');
   }
-  if (input.format !== 'mnt-project' || (input.version !== 1 && input.version !== 2))
+  if (
+    input.format !== 'mnt-project' ||
+    (input.version !== 1 && input.version !== 2)
+  )
     throw new Error('Unsupported project format or version.');
   const signature = validateSignature(input.timeSignature);
   const markers =
@@ -282,7 +286,10 @@ export function parseProject(json: string): {
         };
       }
       const assetId = text(clip.assetId, 'asset reference');
-      if (!audio.has(assetId) || assets.find(a => a.id === assetId)?.kind === 'soundfont')
+      if (
+        !audio.has(assetId) ||
+        assets.find((a) => a.id === assetId)?.kind === 'soundfont'
+      )
         throw new Error('A clip references missing audio.');
       return {
         id: text(clip.id, 'clip ID'),

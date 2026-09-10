@@ -134,7 +134,18 @@ export class ProjectSession {
     const previous = this.atCursor();
     const project = change(previous);
     if (project === previous) return;
-    if (this.engine.getSnapshot().status === 'playing' && project.tracks.some(t => t.kind === 'midi' && t.instrument?.type !== 'synth' && t.clips.some(c => !this.renders.has(this.renderKey(t,c,project.tempo))))) this.engine.pause();
+    if (
+      this.engine.getSnapshot().status === 'playing' &&
+      project.tracks.some(
+        (t) =>
+          t.kind === 'midi' &&
+          t.instrument?.type !== 'synth' &&
+          t.clips.some(
+            (c) => !this.renders.has(this.renderKey(t, c, project.tempo)),
+          ),
+      )
+    )
+      this.engine.pause();
     this.apply(project);
     this.undoStack = [...this.undoStack.slice(-49), previous];
     this.redoStack = [];
@@ -195,7 +206,10 @@ export class ProjectSession {
       (sum, asset) => sum + asset.bytes.byteLength,
       0,
     );
-    encoded += [...this.soundfonts.values()].reduce((sum,bytes) => sum + bytes.byteLength,0);
+    encoded += [...this.soundfonts.values()].reduce(
+      (sum, bytes) => sum + bytes.byteLength,
+      0,
+    );
     let decoded = [...this.assets.values()].reduce(
       (sum, asset) =>
         sum + asset.buffer.length * asset.buffer.numberOfChannels * 4,
@@ -227,7 +241,8 @@ export class ProjectSession {
           index = tracks.length;
           tracks.push({
             ...newTrack(index),
-            name: item.name.replace(/\.(wav|mp3)$/i, '').trim() || 'Audio track',
+            name:
+              item.name.replace(/\.(wav|mp3)$/i, '').trim() || 'Audio track',
           });
         }
         const clip = {
@@ -277,13 +292,16 @@ export class ProjectSession {
     for (const asset of project.assets) {
       if (asset.kind === 'soundfont') {
         const bytes = audio.get(asset.id)!;
-        const runtime = await import('./instrument-runtime');
+        const runtime = await import('./soundfont.ts');
         bankPresets.set(asset.id, runtime.inspectSoundfont(bytes));
         banks.set(asset.id, bytes);
         continue;
       }
       const decoded = await this.engine.decodeFile(
-        new File([audio.get(asset.id)!], asset.name),
+        new File(
+          [audio.get(asset.id)!],
+          asset.encoding === 'mp3' ? `${asset.name}.mp3` : asset.name,
+        ),
       );
       memory += decoded.buffer.length * decoded.buffer.numberOfChannels * 4;
       if (memory > 384 * 1024 * 1024)
@@ -315,7 +333,7 @@ export class ProjectSession {
   }
   serialize() {
     return serializeProject(
-      this.atCursor(),
+      { ...this.atCursor(), version: 2 },
       new Map(
         [...this.assets]
           .map(([id, asset]) => [id, asset.bytes] as [string, ArrayBuffer])
@@ -336,10 +354,20 @@ export class ProjectSession {
   }
   async play() {
     const project = this.state.project;
-    const used = new Set(project.tracks.flatMap(t => t.clips.filter(c => c.kind === 'midi').map(c => this.renderKey(t,c,project.tempo))));
-    for (const key of this.renders.keys()) if (!used.has(key)) this.renders.delete(key);
-    let memory = [...this.renders.values()].reduce((sum,b) => sum + b.length * b.numberOfChannels * 4,0);
-    const instrumentTrack = project.tracks.find(t => t.kind === 'midi');
+    const used = new Set(
+      project.tracks.flatMap((t) =>
+        t.clips
+          .filter((c) => c.kind === 'midi')
+          .map((c) => this.renderKey(t, c, project.tempo)),
+      ),
+    );
+    for (const key of this.renders.keys())
+      if (!used.has(key)) this.renders.delete(key);
+    let memory = [...this.renders.values()].reduce(
+      (sum, b) => sum + b.length * b.numberOfChannels * 4,
+      0,
+    );
+    const instrumentTrack = project.tracks.find((t) => t.kind === 'midi');
     if (instrumentTrack) await this.engine.liveOutput(instrumentTrack.id);
     for (const track of project.tracks)
       if (track.kind === 'midi' && track.instrument?.type !== 'synth') {
@@ -355,7 +383,10 @@ export class ProjectSession {
               this.soundfonts.get(track.instrument?.soundfontId ?? ''),
             );
             memory += buffer.length * buffer.numberOfChannels * 4;
-            if (memory > 384 * 1024 * 1024) throw new Error('Instrument renders exceed 384 MB. Shorten clips or use the built-in synth.');
+            if (memory > 384 * 1024 * 1024)
+              throw new Error(
+                'Instrument renders exceed 384 MB. Shorten clips or use the built-in synth.',
+              );
             this.renders.set(key, buffer);
           }
         }
@@ -390,14 +421,21 @@ export class ProjectSession {
     );
   }
   addMidiClip(trackId: string, beat: number) {
-    if (this.state.project.tracks.find(t => t.id === trackId)?.kind !== 'midi') throw new Error('Choose an instrument track.');
-    if (this.state.project.tracks.reduce((sum,t) => sum + t.clips.length,0) >= 2048) throw new Error('Maximum 2048 clips.');
+    if (
+      this.state.project.tracks.find((t) => t.id === trackId)?.kind !== 'midi'
+    )
+      throw new Error('Choose an instrument track.');
+    if (
+      this.state.project.tracks.reduce((sum, t) => sum + t.clips.length, 0) >=
+      2048
+    )
+      throw new Error('Maximum 2048 clips.');
     const clip: Clip = {
       id: crypto.randomUUID(),
       name: 'MIDI pattern',
       kind: 'midi',
       assetId: '',
-      startBeat: Math.max(0, Math.min(100000,beat)),
+      startBeat: Math.max(0, Math.min(100000, beat)),
       offsetSeconds: 0,
       durationSeconds: 1,
       lengthBeats: 4,
@@ -412,8 +450,12 @@ export class ProjectSession {
     return clip.id;
   }
   async loadSoundfont(trackId: string, file: File) {
-    if (this.state.project.assets.length >= 128) throw new Error('Maximum 128 media assets.');
-    if (this.state.project.tracks.find(t => t.id === trackId)?.kind !== 'midi') throw new Error('Choose an instrument track.');
+    if (this.state.project.assets.length >= 128)
+      throw new Error('Maximum 128 media assets.');
+    if (
+      this.state.project.tracks.find((t) => t.id === trackId)?.kind !== 'midi'
+    )
+      throw new Error('Choose an instrument track.');
     const total =
       [...this.assets.values()].reduce(
         (sum, a) => sum + a.bytes.byteLength,
@@ -423,7 +465,7 @@ export class ProjectSession {
     if (total + file.size > MAX_AUDIO_BYTES)
       throw new Error('Embedded media exceeds 96 MB.');
     const bytes = await file.arrayBuffer();
-    const runtime = await import('./instrument-runtime');
+    const runtime = await import('./soundfont.ts');
     const presets = runtime.inspectSoundfont(bytes);
     if (!presets.length) throw new Error('The SoundFont contains no presets.');
     const id = crypto.randomUUID();
@@ -454,7 +496,11 @@ export class ProjectSession {
   async importMidi(file: File, beat: number) {
     if (file.size > 8 * 1024 * 1024)
       throw new Error('MIDI files must be under 8 MB.');
-    const { Midi } = await import('@tonejs/midi');
+    const midiModule = await import('@tonejs/midi');
+    const Midi =
+      midiModule.Midi ??
+      (midiModule as unknown as { default: { Midi: typeof midiModule.Midi } })
+        .default.Midi;
     const midi = new Midi(await file.arrayBuffer());
     const imported = midi.tracks
       .filter((t) => t.notes.length)
@@ -468,12 +514,14 @@ export class ProjectSession {
           id: crypto.randomUUID(),
           pitch: n.midi,
           start: n.ticks / midi.header.ppq,
-          length: Math.max(1,n.durationTicks) / midi.header.ppq,
+          length: Math.max(1, n.durationTicks) / midi.header.ppq,
           velocity: Math.max(1, Math.round(n.velocity * 127)),
         }));
         const lengthBeats = Math.max(
           4,
-          Math.ceil(notes.reduce((end,n) => Math.max(end,n.start + n.length),0)),
+          Math.ceil(
+            notes.reduce((end, n) => Math.max(end, n.start + n.length), 0),
+          ),
         );
         if (notes.length > 8192 || lengthBeats > 4096)
           throw new Error('This MIDI track exceeds 8192 notes or 4096 beats.');
@@ -483,7 +531,7 @@ export class ProjectSession {
             name: track.name,
             kind: 'midi',
             assetId: '',
-            startBeat: Math.max(0,Math.min(100000,beat)),
+            startBeat: Math.max(0, Math.min(100000, beat)),
             offsetSeconds: 0,
             durationSeconds: 1,
             notes,
@@ -525,17 +573,35 @@ export class ProjectSession {
   duplicate(trackId: string, clipId?: string) {
     const previous = this.clipboard;
     try {
-      const track = this.state.project.tracks.find(t => t.id === trackId);
-      const clip = track?.clips.find(c => c.id === clipId);
+      const track = this.state.project.tracks.find((t) => t.id === trackId);
+      const clip = track?.clips.find((c) => c.id === clipId);
       if (!track || (clipId && !clip)) return '';
-      this.copy(trackId,clipId);
-      return this.paste(trackId,clip ? clip.startBeat + (clip.kind === 'midi' ? clip.lengthBeats ?? 4 : secondsToBeats(clip.durationSeconds,this.state.project.tempo)) : 0);
-    } finally { this.clipboard = previous; }
+      this.copy(trackId, clipId);
+      return this.paste(
+        trackId,
+        clip
+          ? clip.startBeat +
+              (clip.kind === 'midi'
+                ? (clip.lengthBeats ?? 4)
+                : secondsToBeats(
+                    clip.durationSeconds,
+                    this.state.project.tempo,
+                  ))
+          : 0,
+      );
+    } finally {
+      this.clipboard = previous;
+    }
   }
   paste(trackId: string, beat: number) {
     if (!this.clipboard) return '';
     const adding = this.clipboard.track?.clips.length ?? 1;
-    if (this.state.project.tracks.reduce((sum,t) => sum + t.clips.length,0) + adding > 2048) throw new Error('Maximum 2048 clips.');
+    if (
+      this.state.project.tracks.reduce((sum, t) => sum + t.clips.length, 0) +
+        adding >
+      2048
+    )
+      throw new Error('Maximum 2048 clips.');
     const cloneClip = (c: Clip): Clip => ({
       ...structuredClone(c),
       id: crypto.randomUUID(),

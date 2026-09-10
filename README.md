@@ -1,6 +1,6 @@
-# MNT Studio — project workspace
+# MNT Studio - MIDI workspace
 
-A web DAW built with React, TypeScript, Vite, and the Web Audio API. Arrange WAV clips on audio tracks, set a tempo, and save a portable project file. Audio is processed locally. No backend or environment variables are required.
+A web DAW built with React, TypeScript, Vite, and the Web Audio API. Arrange audio and MIDI clips, play instruments, and save a portable project file. Audio is processed locally. The synth and SoundFont workflow needs no backend or environment variables. VST3 instruments use the optional local native companion.
 
 ## Run locally
 
@@ -11,17 +11,22 @@ npm install
 npm run dev
 ```
 
-Open the localhost URL printed by Vite. Import WAVs, arrange clips, and press play. Space toggles play/pause; Escape stops and resets. Click the bar ruler or an empty lane, or drag the position slider, to seek. Focused form controls keep their normal keyboard behavior.
+Open the localhost URL printed by Vite. Import WAV/MP3 files, or add an instrument track using the piano icon, double-click its lane to create a MIDI clip, and draw notes. Space toggles play/pause; Escape stops and resets. Click the bar ruler or an empty lane, or drag the position slider, to seek. Focused form controls keep their normal keyboard behavior.
 
 ## Included
 
 - A DAW window with a project title bar, transport, audio library, scrollable arrangement, track headers, clip inspector, master output, and fullscreen control.
 - Named projects with a versioned `.mnt` file format, save/open, unsaved-change prompts, and 50 steps of undo/redo.
 - Add, rename, and remove tracks; per-track volume, mute, solo, and master routing.
-- Import multiple WAVs by file picker or drag and drop. Imports onto a selected track are placed sequentially from the playhead; imports onto new tracks share a start position.
+- Import multiple WAVs or MP3s by file picker or drag and drop. Imports onto a selected track are placed sequentially from the playhead; imports onto new tracks share a start position.
 - Drag clips along the timeline or between tracks, snap to beats, trim the right edge, duplicate, delete, or edit precise start/offset/duration values in the inspector.
+- Context menus on tracks, audio/MIDI clips, and notes: cut, copy, paste, duplicate, and delete. Track menus also import audio. Drag the bottom edge of a track header to resize it, or focus the handle and use up/down arrows.
+- A piano roll with pitch, velocity, start, note length, note dragging/resizing, quantized drawing, and live computer/Web MIDI keyboard capture. MIDI file import creates instrument tracks and follows the current project tempo.
+- A built-in polyphonic oscillator synth with waveform, attack, decay, sustain, release, cutoff, resonance, and detune controls.
+- SF2/SF3 bank loading, preset selection, live audition, and offline rendered playback.
+- Optional local VST3 instrument hosting with exposed parameter controls and rendered playback; see [native host setup](native-host/README.md).
 - Reuse audio from the project library without embedding duplicate copies in the project file.
-- Tempo from 20–300 BPM, 4/4 bars and beats, a bars/beats/ticks display (960 ticks per beat), an elapsed-time display, and timeline zoom.
+- Tempo from 20–300 BPM, editable time signatures and signature-change markers, a bars/beats/ticks display (960 ticks per beat), an elapsed-time display, and timeline zoom.
 - Play, pause/resume, stop, return to start, and seek using the audio context's clock.
 - Master volume from −60 to +6 dB, mute, stereo post-gain peak meters, and a resettable clipping indicator.
 - Output device discovery/selection where `AudioContext.setSinkId` is available, including fallback to the system default if a selected device disappears.
@@ -31,13 +36,13 @@ Open the localhost URL printed by Vite. Import WAVs, arrange clips, and press pl
 
 ## Project files and editing
 
-**Save project** (Ctrl/Cmd+S) downloads a `.mnt` project copy. **Open project** (Ctrl/Cmd+O) restores it. The file includes project name and ID, tempo, playhead position, master settings, track settings, clip timing, and original WAV bytes encoded in JSON. It can move between computers without missing-file relinking. This is a download-based workflow, not an overwrite-in-place file editor or an autosave service. Reloading clears the in-memory session, so download a copy before leaving.
+**Save project** (Ctrl/Cmd+S) downloads a `.mnt` project copy. **Open project** (Ctrl/Cmd+O) restores it. The file includes project name and ID, tempo, playhead position, master settings, track settings, clip timing, MIDI notes and instruments, time signatures and markers, track heights, and original WAV/MP3/SoundFont bytes encoded in JSON. New saves use version 2; version 1 audio projects remain readable. It can move between computers without missing-file relinking. This is a download-based workflow, not an overwrite-in-place file editor or an autosave service. Reloading clears the in-memory session, so download a copy before leaving.
 
-Projects support 64 tracks, 128 audio files, 2048 clips, and 96 MB of embedded WAV data, with an additional decoded-memory limit. Project files are limited to 140 MB. New projects start with two empty audio tracks and a 16-bar timeline; the timeline expands to fit the arrangement. Blank regions and muted tracks still advance the playhead.
+Projects support 64 tracks, 128 media files, 2048 clips, and 96 MB of embedded audio/SoundFont data, with an additional decoded-memory limit. Project files are limited to 140 MB. New projects start with two empty audio tracks and a 16-bar timeline; the timeline expands to fit the arrangement. Blank regions and muted tracks still advance the playhead.
 
-Clip starts use zero-based beats (beat 0 is bar 1); source offsets and durations use seconds. Tempo changes move clip starts on the grid and retain the musical playhead position. WAVs play at their original speed: this version does not perform time-stretching. Overlapping clips are mixed, including overlaps on the same track. Trimming is nondestructive. Undoing track/clip deletion retains the source audio.
+Clip starts and MIDI note timing use zero-based quarter-note beats (beat 0 is bar 1); audio source offsets and durations use seconds. MIDI clips support 8192 notes and 4096 beats each. A signature marker begins a new bar at its beat, truncating the previous bar if necessary; it does not move existing clips. The signature display counts beats using the selected denominator. Tempo changes move clip starts on the grid and retain the musical playhead position. WAVs play at their original speed: this version does not perform time-stretching. Overlapping clips are mixed, including overlaps on the same track. Trimming is nondestructive. Undoing track/clip deletion retains the source audio.
 
-Project opening validates the document, asset references, WAV bytes, and clip source boundaries before replacing the current session. Unsupported, corrupt, or incomplete files leave the existing project intact. Opening a project does not autoplay. Output-device selection and audio-engine preferences stay specific to the current browser/device and are not part of the project file.
+Project opening validates the document, asset references, media bytes, MIDI ranges, instrument references, and clip source boundaries before replacing the current session. Unsupported, corrupt, or incomplete files leave the existing project intact. Opening a project does not autoplay. Output-device selection and audio-engine preferences stay specific to the current browser/device and are not part of the project file.
 
 ### Shortcuts
 
@@ -50,9 +55,24 @@ Project opening validates the document, asset references, WAV bytes, and clip so
 | Undo                     | Ctrl/Cmd+Z                     |
 | Redo                     | Ctrl/Cmd+Shift+Z or Ctrl/Cmd+Y |
 | Nudge a focused clip     | Left/right arrows              |
-| Remove selected clip     | Delete or Backspace            |
+| Remove selection         | Delete or Backspace            |
+| Cut / copy / paste       | Ctrl/Cmd+X / C / V             |
+| Duplicate selection      | Ctrl/Cmd+D                     |
 
 Drag a library file to a lane, or double-click it to insert at the playhead on the selected track. The library button also supports Enter. Drag the clip's right edge to trim; use the inspector for keyboard-accessible precise editing.
+
+## MIDI and instruments
+
+1. Click the piano icon next to **Track** to add an instrument track. Its default instrument is the built-in synth.
+2. Double-click an empty instrument lane, or use **MIDI clip** in the inspector/context menu. Double-click the clip to open the piano roll.
+3. Click the grid to draw a note, drag to move it, and drag its right edge to change length. The note controls edit velocity, pitch, start, and length precisely. Right-click a note for edit actions.
+4. Enable **Keys** to play `A W S E D F T G Y H U J K` (C through C in the selected octave). Enable **Capture** to write incoming notes to the selected clip. When stopped, notes enter at the editor cursor and advance on release; during playback they use the playhead. This is basic quantized capture, not a full recording/take system.
+5. Click **MIDI input** to request Web MIDI access, then select your hardware input. Permission and browser support are required. The on-screen keys and computer keyboard work without Web MIDI. **All notes off**, losing window focus, disconnecting an input, or closing the editor releases held notes.
+6. Use the instrument inspector to edit the synth, load an `.sf2`/`.sf3` bank, or pair the native VST3 companion. SoundFont banks embed in the project; plugins and external plugin sample libraries stay on your computer.
+
+SoundFont and VST3 playback renders each phrase before starting and caches the result. Changes to notes, instruments, or tempo invalidate the cache; editing an uncached rendered phrase during playback pauses transport until Play prepares it again. Renders use stereo 48 kHz, include a two-second release tail, allow at most five minutes including that tail per clip, and cap cached rendered audio at 384 MB. The synth and SoundFonts support live keys. VST3 currently supports offline phrase rendering and normalized 0 to 1 parameters, without a native plugin editor, live MIDI streaming, parameter automation, or proprietary preset-state saving. Native plugin compatibility must be checked with your installed instruments.
+
+The transport signature button edits the initial signature. Use the **+ signature** button above the track headers or right-click the ruler to add a change at the playhead. Click an existing marker to edit its position/signature; right-click to remove it. MIDI file imports retain notes and dynamics at the project tempo; imported tempo maps, signature maps, sustain/controllers, and program changes are not imported yet.
 
 ## Deploy on Vercel
 
@@ -72,14 +92,15 @@ References: [Vercel's Vite deployment guide](https://vercel.com/docs/frameworks/
 - Web Audio does **not** expose a portable hardware buffer-size control. The selected sample count is translated into [`AudioContextOptions.latencyHint`](https://developer.mozilla.org/en-US/docs/Web/API/AudioContext/AudioContext), which the browser may ignore. Reported latency is displayed independently. The device-default rate uses the previous rate, or 48 kHz, to calculate the initial hint.
 - Sample rate controls the context. The browser handles resampling during decoding/playback and may resample again to the hardware rate. Source WAV metadata remains distinct from the engine rate. Unsupported settings produce an error while preserving the existing audio graph.
 - Changing engine settings replaces the context and resumes at the retained position. This may cause a short gap; it is not a gapless device reconfiguration.
-- Imports support standard RIFF/WAVE files containing PCM or float audio that the browser can decode, within the project-wide limits above. RF64 and compressed WAV codecs are not supported. Multichannel files are mixed to stereo for the master output; each clip shows a waveform of the first channel.
+- Imports support standard RIFF/WAVE files containing PCM or float audio that the browser can decode, within the project-wide limits above. MP3 is also supported where the browser decoder provides it. RF64 and compressed WAV codecs are not supported. Multichannel files are mixed to stereo for the master output; each clip shows a waveform of the first channel.
 - Meters are sampled peak meters, not true-peak or loudness meters. +6 dB can clip. Click the clipping readout to reset the indicator.
-- Recording, plugins, time-stretching, alternative time signatures, and final audio export are not included in this project-system version.
+- Audio recording, time-stretching, final audio export, MIDI controller automation, and native plugin editors are not included. Web MIDI access requires a secure context and browser support; check the in-app result on your target browser.
 
 ## Development
 
 ```sh
 npm test
+python -m unittest discover -s native-host -p "test_*.py"
 npm run lint
 npm run build
 npm start
@@ -87,4 +108,6 @@ npm start
 
 `lib/audio-engine.ts` owns transport, multitrack scheduling, the audio graph, output routing, and context lifecycle. A silent buffer source marks the arrangement boundary, so transport also works across gaps. `lib/project.ts` defines and validates the file format. `lib/project-session.ts` owns editing, history, media, and transactional import/open. `lib/audio-utils.ts` contains WAV validation, waveform peaks, and unit conversions. `app/daw.tsx` provides the arrangement UI; `components/daw-controls.tsx` contains the shared controls and audio settings.
 
-The unit suite exercises project round-trips, exact embedded WAV preservation, schema failures, clip boundaries, undo/redo, transactional imports, tempo changes, simultaneous scheduling, seeking across overlaps, silent gaps, mixer routing, context replacement, and the original core audio behavior using a deterministic AudioContext test double. Hardware routing, actual audible output, and device permission prompts still need testing on the target browser and audio device.
+The unit suite exercises project round-trips, exact embedded WAV preservation, schema failures, clip boundaries, undo/redo, transactional imports, tempo changes, simultaneous scheduling, seeking across overlaps, silent gaps, mixer routing, context replacement, and the original core audio behavior using a deterministic AudioContext test double. MIDI tests cover scheduling, envelopes, concurrent live voices, clipboard isolation, file import, format compatibility, signature arithmetic, and a generated SF2 bank round-trip. Native host tests cover pairing, CORS, bundle discovery, and validation without loading native code. Hardware MIDI/output, browser SoundFont rendering, SF3 decoding, actual installed VST3 rendering, audible output, and permission prompts still need testing on the target browser and audio device.
+
+Instrument dependencies: [SpessaSynth documentation](https://spessasus.github.io/spessasynth_lib/) (SF2/SF3 synthesis, Apache-2.0), [Tone.js MIDI](https://github.com/Tonejs/Midi) (MIDI files, MIT), and the optional [Pedalboard instrument API](https://spotify.github.io/pedalboard/reference/pedalboard.html) (native VST3, GPL-3.0). No commercial SoundFonts or plugins are bundled.
