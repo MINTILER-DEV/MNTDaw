@@ -1,12 +1,15 @@
 import {
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type PointerEvent as ReactPointerEvent,
 } from 'react';
 import {
   Circle,
+  Copy,
+  ClipboardPaste,
   KeyboardMusic,
   Piano,
   Plus,
@@ -122,7 +125,12 @@ export function PianoRoll({
     }
   }, [disabled, session]);
   const note = notes.find((note) => note.id === selected);
-  const selectedNotes = notes.filter((n) => selection.includes(n.id));
+  const selectedIds = useMemo(() => new Set(selection), [selection]);
+  const selectedNotes = notes.filter((n) => selectedIds.has(n.id));
+  const previewById = useMemo(
+    () => new Map((preview ?? []).map((n) => [n.id, n])),
+    [preview],
+  );
   const commit = useCallback(
     (change: (notes: MidiNote[]) => MidiNote[]) => {
       if (disabled) return;
@@ -336,7 +344,7 @@ export function PianoRoll({
     commit((notes) => notes.map((n) => updates.get(n.id) ?? n));
   };
   const groupFor = (target?: MidiNote) =>
-    target && !selection.includes(target.id) ? [target] : selectedNotes;
+    target && !selectedIds.has(target.id) ? [target] : selectedNotes;
   const remove = (group = selectedNotes) => {
     const ids = new Set(group.map((n) => n.id));
     commit((notes) => notes.filter((n) => !ids.has(n.id)));
@@ -577,6 +585,25 @@ export function PianoRoll({
         </IconButton>
       </div>
       <div className="note-properties">
+        <div className="piano-clipboard">
+          <span>Notes</span>
+          <div>
+            <IconButton
+              label="Copy selected notes (Ctrl+C)"
+              disabled={disabled || !selectedNotes.length}
+              onClick={() => copy()}
+            >
+              <Copy size={13} />
+            </IconButton>
+            <IconButton
+              label="Paste notes at cursor (Ctrl+V)"
+              disabled={disabled}
+              onClick={paste}
+            >
+              <ClipboardPaste size={13} />
+            </IconButton>
+          </div>
+        </div>
         <div className="piano-zoom">
           <span>Zoom</span>
           <div>
@@ -727,6 +754,20 @@ export function PianoRoll({
               }
               tabIndex={-1}
               aria-label="Piano roll note grid"
+              onContextMenu={(event) => {
+                if (event.target !== event.currentTarget) return;
+                const rect = event.currentTarget.getBoundingClientRect();
+                setCursor(
+                  Math.max(
+                    0,
+                    Math.min(
+                      length - step,
+                      Math.floor((event.clientX - rect.left) / PX / step) *
+                        step,
+                    ),
+                  ),
+                );
+              }}
               onPointerDown={(event) => {
                 if (
                   disabled ||
@@ -767,8 +808,7 @@ export function PianoRoll({
               }}
             >
               {notes.map((original) => {
-                const n =
-                  preview?.find((n) => n.id === original.id) ?? original;
+                const n = previewById.get(original.id) ?? original;
                 return (
                   <EditMenu
                     key={n.id}
@@ -802,7 +842,7 @@ export function PianoRoll({
                     ]}
                   >
                     <button
-                      className={`midi-note ${selection.includes(n.id) ? 'selected-note' : ''}`}
+                      className={`midi-note ${selectedIds.has(n.id) ? 'selected-note' : ''}`}
                       style={{
                         left: n.start * PX,
                         top: (HIGH - n.pitch) * ROW,
@@ -812,9 +852,9 @@ export function PianoRoll({
                       }}
                       title={`${noteName(n.pitch)} · velocity ${n.velocity}`}
                       aria-label={`${noteName(n.pitch)}, velocity ${n.velocity}, length ${n.length} beats`}
-                      aria-pressed={selection.includes(n.id)}
+                      aria-pressed={selectedIds.has(n.id)}
                       onContextMenu={() => {
-                        if (!selection.includes(n.id)) setSelected(n.id);
+                        if (!selectedIds.has(n.id)) setSelected(n.id);
                       }}
                       onPointerDown={(event) => {
                         if (disabled || event.button !== 0) return;
@@ -831,7 +871,7 @@ export function PianoRoll({
                           return;
                         }
                         const group = groupFor(original);
-                        if (!selection.includes(n.id)) setSelected(n.id);
+                        if (!selectedIds.has(n.id)) setSelected(n.id);
                         setCursor(n.start);
                         noteDrag.current = {
                           note: original,

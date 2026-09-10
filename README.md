@@ -65,7 +65,7 @@ Drag a library file to a lane, or double-click it to insert at the playhead on t
 
 1. Click the piano icon next to **Track** to add an instrument track. Its default instrument is the built-in synth.
 2. Double-click an empty instrument lane, or use **MIDI clip** in the inspector/context menu. Double-click the clip to open the piano roll.
-3. Click the grid to draw a note, drag to move it, and drag its right edge to change length. The note controls edit velocity, pitch, start, and length precisely. Right-click a note for edit actions.
+3. Click empty grid space to draw a note; drag empty space to box-select existing notes. Ctrl/Cmd-click toggles individual notes, Ctrl/Cmd+A selects all, and Ctrl/Cmd/Shift-drag adds to the selection. Drag selected notes to move the group, or a right edge to resize it. Arrow keys nudge the group. Velocity applies to the selection; pitch, start, and length controls adjust the group relative to the last-selected note. Right-click for edit actions.
 4. Enable **Keys** to play `A W S E D F T G Y H U J K` (C through C in the selected octave). Enable **Capture** to write incoming notes to the selected clip. When stopped, notes enter at the editor cursor and advance on release; during playback they use the playhead. This is basic quantized capture, not a full recording/take system.
 5. Click **MIDI input** to request Web MIDI access, then select your hardware input. Permission and browser support are required. The on-screen keys and computer keyboard work without Web MIDI. **All notes off**, losing window focus, disconnecting an input, or closing the editor releases held notes.
 6. Use the instrument inspector to edit the synth, load an `.sf2`/`.sf3` bank, or pair the native VST3 companion. SoundFont banks embed in the project; plugins and external plugin sample libraries stay on your computer.
@@ -73,6 +73,14 @@ Drag a library file to a lane, or double-click it to insert at the playhead on t
 SoundFont and VST3 playback renders each phrase before starting and caches the result. Changes to notes, instruments, or tempo invalidate the cache; editing an uncached rendered phrase during playback pauses transport until Play prepares it again. Renders use stereo 48 kHz, include a two-second release tail, allow at most five minutes including that tail per clip, and cap cached rendered audio at 384 MB. The synth and SoundFonts support live keys. VST3 currently supports offline phrase rendering and normalized 0 to 1 parameters, without a native plugin editor, live MIDI streaming, parameter automation, or proprietary preset-state saving. Native plugin compatibility must be checked with your installed instruments.
 
 The transport signature button edits the initial signature. Use the **+ signature** button above the track headers or right-click the ruler to add a change at the playhead. Click an existing marker to edit its position/signature; right-click to remove it. MIDI file imports retain notes and dynamics at the project tempo; imported tempo maps, signature maps, sustain/controllers, and program changes are not imported yet.
+
+### Note clipboard, zoom, and splitting
+
+- Copy/paste selected notes with the editor's icons, context menu, or Ctrl/Cmd+C and Ctrl/Cmd+V. The note clipboard works across MIDI clips in the current project. Pasting retains relative timing, lengths, pitches, and velocities. Ctrl/Cmd+D duplicates the group; Ctrl/Cmd+X moves it to the clipboard; Delete removes it. Undo restores each group edit in one step.
+- Right-click empty piano-roll space to position the paste cursor, or Ctrl/Cmd-click empty space to move that cursor without drawing. Pasted groups clamp together at the clip end; extend the clip first if the group is too long to fit.
+- Use the piano-roll zoom buttons, Ctrl/Cmd+wheel, or Ctrl/Cmd+plus/minus while the editor has focus. Click the percentage or use Ctrl/Cmd+0 to reset. Zoom ranges from 25% to 400% and keeps the visible center in place.
+- Split a selected WAV, MP3, or MIDI clip using the scissors button, **Split clip at playhead** in its context menu, or Ctrl/Cmd+B in the arrangement. Alt-click directly on a clip to split at the pointer. Arrangement snap applies to both methods; disable it for finer cuts. Splits must be inside a clip, and MIDI fragments must be at least 1/64 note long.
+- Audio splits reuse the original media with contiguous source offsets. MIDI splits retain notes on their respective sides; a note crossing the split becomes two notes and retriggers at the boundary. Splits are undoable and saved in the project. **Cut to clipboard** remains a separate action.
 
 ## Deploy on Vercel
 
