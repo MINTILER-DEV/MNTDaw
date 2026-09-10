@@ -57,6 +57,8 @@ export function PianoRoll({
   track,
   session,
   positionBeats,
+  height,
+  onHeightChange,
   close,
   report,
   disabled,
@@ -65,10 +67,31 @@ export function PianoRoll({
   track: Track;
   session: ProjectSession;
   positionBeats: number;
+  height: number;
+  onHeightChange: (height: number) => void;
   close: () => void;
   report: (text: string) => void;
   disabled: boolean;
 }) {
+  const panel = useRef<HTMLElement>(null);
+  const [maxHeight, setMaxHeight] = useState(600);
+  const panelDrag = useRef<{
+    y: number;
+    height: number;
+    original: number;
+  } | null>(null);
+  const panelHeight = Math.max(180, Math.min(maxHeight, height));
+  useEffect(() => {
+    const parent = panel.current?.parentElement;
+    if (!parent) return;
+    const observer = new ResizeObserver(([entry]) => {
+      setMaxHeight(Math.max(180, Math.floor(entry.contentRect.height - 130)));
+    });
+    observer.observe(parent);
+    return () => observer.disconnect();
+  }, []);
+  const resizePanel = (next: number) =>
+    onHeightChange(Math.max(180, Math.min(maxHeight, Math.round(next))));
   const [selection, setSelection] = useState<string[]>([]);
   const setSelected = useCallback(
     (id: string) => setSelection(id ? [id] : []),
@@ -401,7 +424,15 @@ export function PianoRoll({
       report(error instanceof Error ? error.message : 'Could not paste notes.');
     }
   };
-  const paste = () => insert(session.copiedNotes(), cursor);
+  const paste = () => {
+    if (disabled) return;
+    try {
+      const ids = session.pasteNotesAtPlayhead(track.id, clip.id, grid);
+      if (ids.length) setSelection(ids);
+    } catch (error) {
+      report(error instanceof Error ? error.message : 'Could not paste notes.');
+    }
+  };
   const duplicate = (group = selectedNotes) => {
     if (group.length)
       insert(group, Math.max(...group.map((n) => n.start + n.length)));
@@ -519,6 +550,8 @@ export function PianoRoll({
     // eslint-disable-next-line jsx-a11y/no-noninteractive-element-interactions
     <section
       className="piano-roll"
+      ref={panel}
+      style={{ height: panelHeight }}
       data-piano-roll="true"
       aria-label="MIDI piano roll"
       onKeyDown={(event) => {
@@ -568,6 +601,67 @@ export function PianoRoll({
         }
       }}
     >
+      {/* eslint-disable jsx-a11y/prefer-tag-over-role -- Interactive pane splitter with keyboard resizing and value announcements. */}
+      <div
+        role="separator"
+        tabIndex={0}
+        aria-label="Resize piano roll"
+        aria-orientation="horizontal"
+        aria-valuemin={180}
+        aria-valuemax={maxHeight}
+        aria-valuenow={panelHeight}
+        aria-valuetext={`${panelHeight} pixels tall`}
+        className="piano-roll-resize"
+        title="Drag to resize piano roll. Double-click to reset."
+        onPointerDown={(event) => {
+          if (event.button !== 0) return;
+          event.preventDefault();
+          event.stopPropagation();
+          event.currentTarget.focus();
+          event.currentTarget.setPointerCapture(event.pointerId);
+          panelDrag.current = {
+            y: event.clientY,
+            height: panelHeight,
+            original: height,
+          };
+        }}
+        onPointerMove={(event) => {
+          const drag = panelDrag.current;
+          if (drag) resizePanel(drag.height + drag.y - event.clientY);
+        }}
+        onPointerUp={(event) => {
+          panelDrag.current = null;
+          if (event.currentTarget.hasPointerCapture(event.pointerId))
+            event.currentTarget.releasePointerCapture(event.pointerId);
+        }}
+        onPointerCancel={() => {
+          if (panelDrag.current) onHeightChange(panelDrag.current.original);
+          panelDrag.current = null;
+        }}
+        onLostPointerCapture={() => {
+          panelDrag.current = null;
+        }}
+        onDoubleClick={() => resizePanel(320)}
+        onKeyDown={(event) => {
+          if (
+            !['ArrowUp', 'ArrowDown', 'Home', 'End', 'Enter'].includes(
+              event.key,
+            )
+          )
+            return;
+          event.preventDefault();
+          event.stopPropagation();
+          if (event.key === 'Home') resizePanel(180);
+          else if (event.key === 'End') resizePanel(maxHeight);
+          else if (event.key === 'Enter') resizePanel(320);
+          else
+            resizePanel(
+              panelHeight +
+                (event.key === 'ArrowUp' ? 1 : -1) * (event.shiftKey ? 64 : 16),
+            );
+        }}
+      />
+      {/* eslint-enable jsx-a11y/prefer-tag-over-role */}
       <div className="piano-toolbar">
         <Piano size={15} />
         <strong>{clip.name}</strong>
@@ -624,7 +718,7 @@ export function PianoRoll({
               <Copy size={13} />
             </IconButton>
             <IconButton
-              label="Paste notes at cursor (Ctrl+V)"
+              label="Paste notes at playhead (Ctrl+V)"
               disabled={disabled}
               onClick={paste}
             >
@@ -789,7 +883,7 @@ export function PianoRoll({
             </div>
             <EditMenu
               actions={[
-                { label: 'Paste notes at cursor', action: paste },
+                { label: 'Paste notes at playhead', action: paste },
                 {
                   label: 'Select all notes',
                   action: () => setSelection(notes.map((n) => n.id)),
@@ -876,7 +970,7 @@ export function PianoRoll({
                           disabled,
                         },
                         {
-                          label: 'Paste notes at cursor',
+                          label: 'Paste notes at playhead',
                           action: paste,
                           disabled,
                         },

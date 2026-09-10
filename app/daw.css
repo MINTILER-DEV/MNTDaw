@@ -1993,7 +1993,7 @@ kbd {
 }
 .piano-roll {
   height: 320px;
-  max-height: 55vh;
+  min-height: 180px;
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
@@ -2182,9 +2182,6 @@ kbd {
   .piano-toolbar > strong {
     margin-right: auto;
     max-width: 95px;
-  }
-  .piano-roll {
-    height: 300px;
   }
 }
 
@@ -2437,4 +2434,32 @@ kbd {
   background: #25352ef2;
   color: #d0e7be;
   font: 9px var(--font-mono);
+}
+
+.piano-roll-resize {
+  margin: 0;
+  border: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 9px;
+  width: 100%;
+  cursor: ns-resize;
+  touch-action: none;
+  user-select: none;
+  background: #202e2a;
+}
+.piano-roll-resize::after {
+  content: '';
+  display: block;
+  width: 40px;
+  height: 3px;
+  border-radius: 3px;
+  background: #77976d;
+}
+.piano-roll-resize:hover,
+.piano-roll-resize:focus-visible {
+  background: #3c5342;
+  outline: 1px solid #b9de93;
+  outline-offset: -1px;
 }

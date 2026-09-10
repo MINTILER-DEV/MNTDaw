@@ -172,6 +172,7 @@ export default function Daw() {
   const [settings, setSettings] = useState(false);
   const [help, setHelp] = useState(false);
   const [roll, setRoll] = useState(false);
+  const [pianoHeight, setPianoHeight] = useState(320);
   const [signatureEdit, setSignatureEdit] = useState<{
     id?: string;
     beat: number;
@@ -2033,6 +2034,8 @@ export default function Daw() {
               track={selectedTrack}
               session={session}
               positionBeats={beat}
+              height={pianoHeight}
+              onHeightChange={setPianoHeight}
               close={() => setRoll(false)}
               report={report}
               disabled={!!busy}
