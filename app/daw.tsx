@@ -34,6 +34,7 @@ import {
   Plus,
   Redo2,
   Save,
+  Scissors,
   Settings2,
   ShieldCheck,
   SkipBack,
@@ -224,6 +225,13 @@ export default function Daw() {
     return top;
   };
   const anySolo = project.tracks.some((track) => track.solo);
+  const splitAt = snapBeat(beat, snap);
+  const canSplit =
+    !!selectedClip &&
+    splitAt - selectedClip.startBeat >=
+      (selectedClip.kind === 'midi' ? 0.0625 : 0.000001) &&
+    clipEndBeat(selectedClip, project.tempo) - splitAt >=
+      (selectedClip.kind === 'midi' ? 0.0625 : 0.000001);
   const report = useCallback((text: string) => setMessage(text), []);
 
   const run = useCallback(
@@ -250,6 +258,16 @@ export default function Daw() {
     },
     [],
   );
+
+  const split = (track: Track, clip: Clip, at: number) => {
+    void run('Splitting clip', async () => {
+      const right = session.split(track.id, clip.id, at);
+      if (right) {
+        selectTrack(track.id);
+        selectClip(right);
+      }
+    });
+  };
 
   useEffect(() => {
     let frame = 0,
@@ -483,6 +501,24 @@ export default function Daw() {
         });
         return;
       }
+      if (
+        command &&
+        event.key.toLowerCase() === 'b' &&
+        selectedTrack &&
+        selectedClipId &&
+        !target.closest('[data-piano-roll]')
+      ) {
+        event.preventDefault();
+        void run('Splitting clip', async () => {
+          const right = session.split(
+            selectedTrack.id,
+            selectedClipId,
+            snapBeat(beat, snap),
+          );
+          if (right) selectClip(right);
+        });
+        return;
+      }
       if (command && event.key.toLowerCase() === 'o') {
         event.preventDefault();
         if (session.getSnapshot().dirty) setDiscard('open');
@@ -535,6 +571,7 @@ export default function Daw() {
     selectedTrack,
     beat,
     signatureEdit,
+    snap,
   ]);
 
   const startDrag = (
@@ -549,6 +586,18 @@ export default function Daw() {
     const element =
       event.currentTarget.closest<HTMLButtonElement>('.arrangement-clip')!;
     element.focus();
+    if (event.altKey) {
+      split(
+        track,
+        clip,
+        snapBeat(
+          clip.startBeat +
+            (event.clientX - element.getBoundingClientRect().left) / zoom,
+          snap,
+        ),
+      );
+      return;
+    }
     element.setPointerCapture(event.pointerId);
     selectTrack(track.id);
     selectClip(clip.id);
@@ -675,8 +724,16 @@ export default function Daw() {
             },
           ]
         : []),
+      ...(clip
+        ? [
+            {
+              label: 'Split clip at playhead (Ctrl+B)',
+              action: () => split(track, clip, snapBeat(beat, snap)),
+            },
+          ]
+        : []),
       {
-        label: clip ? 'Cut clip' : 'Cut track',
+        label: clip ? 'Cut clip to clipboard' : 'Cut track to clipboard',
         action: () => session.copy(track.id, clip?.id, true),
       },
       {
@@ -952,6 +1009,16 @@ export default function Daw() {
             <Redo2 size={16} />
           </IconButton>
           <span className="toolbar-divider" />
+          <IconButton
+            label="Split selected clip at playhead (Ctrl+B)"
+            disabled={!!busy || !canSplit}
+            onClick={() => {
+              if (selectedTrack && selectedClip)
+                split(selectedTrack, selectedClip, splitAt);
+            }}
+          >
+            <Scissors size={16} />
+          </IconButton>
           <button
             className={`snap-button ${snap ? 'enabled' : ''}`}
             aria-pressed={snap}

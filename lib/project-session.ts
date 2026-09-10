@@ -14,6 +14,8 @@ import {
   type Track,
 } from './project.ts';
 import { defaultInstrument } from './midi.ts';
+import type { MidiNote } from './midi.ts';
+import { splitClip } from './editing.ts';
 
 export type AudioAsset = Awaited<ReturnType<AudioEngine['decodeFile']>>;
 type SessionSnapshot = {
@@ -33,6 +35,35 @@ export class ProjectSession {
   >();
   private renders = new Map<string, AudioBuffer>();
   private clipboard: { track?: Track; clip?: Clip } | null = null;
+  private noteClipboard: MidiNote[] = [];
+  copyNotes(notes: MidiNote[]) {
+    this.noteClipboard = structuredClone(notes);
+  }
+  copiedNotes() {
+    return structuredClone(this.noteClipboard);
+  }
+  split(trackId: string, clipId: string, beat: number) {
+    const project = this.state.project;
+    const clip = project.tracks
+      .find((t) => t.id === trackId)
+      ?.clips.find((c) => c.id === clipId);
+    if (!clip) return '';
+    if (project.tracks.reduce((sum, t) => sum + t.clips.length, 0) >= 2048)
+      throw new Error('Maximum 2048 clips.');
+    const halves = splitClip(clip, beat, project.tempo);
+    this.edit((p) => ({
+      ...p,
+      tracks: p.tracks.map((t) =>
+        t.id === trackId
+          ? {
+              ...t,
+              clips: t.clips.flatMap((c) => (c.id === clipId ? halves : [c])),
+            }
+          : t,
+      ),
+    }));
+    return halves[1].id;
+  }
   private undoStack: Project[] = [];
   private redoStack: Project[] = [];
   private listeners = new Set<() => void>();
@@ -174,6 +205,7 @@ export class ProjectSession {
     this.presets.clear();
     this.renders.clear();
     this.clipboard = null;
+    this.noteClipboard = [];
     this.undoStack = [];
     this.redoStack = [];
     const project = newProject();
@@ -325,6 +357,7 @@ export class ProjectSession {
     this.presets = bankPresets;
     this.renders.clear();
     this.clipboard = null;
+    this.noteClipboard = [];
     this.undoStack = [];
     this.redoStack = [];
     this.apply(project);

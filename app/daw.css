@@ -2220,6 +2220,52 @@ kbd {
 .midi-clip-properties {
   flex-shrink: 0;
 }
+
+.note-selection-box {
+  position: absolute;
+  pointer-events: none;
+  z-index: 5;
+  border: 1px solid #d4efb1;
+  background: #b9de9322;
+}
+.note-cursor {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: #d8cb8680;
+  pointer-events: none;
+}
+.piano-zoom {
+  width: 110px;
+  min-width: 110px;
+}
+.piano-zoom > span {
+  font-size: 8px;
+  color: #8caa9e;
+}
+.piano-zoom > div {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+.piano-zoom > div > button {
+  font: 9px var(--font-mono);
+  color: #bdd2ac;
+}
+.piano-zoom .icon-button {
+  width: 24px;
+  height: 25px;
+}
+.note-grid {
+  background-size:
+    var(--note-step) 100%,
+    100% 16px,
+    var(--quarter-width) 100%;
+}
+.midi-note.selected-note {
+  opacity: 1 !important;
+}
 .track-header {
   padding-top: 8px;
   padding-bottom: 6px;
