@@ -21,7 +21,8 @@ import { Choice, IconButton, NumberField } from './daw-controls';
 import { EditMenu } from './edit-menu';
 import { moveNotes, resizeNotes, pasteNotes, notesInBox } from '@/lib/editing';
 import { noteName, type MidiNote } from '@/lib/midi';
-import type { Clip, Track } from '@/lib/project';
+import { beatsToSeconds, type Clip, type Track } from '@/lib/project';
+import { PianoTimeline } from './piano-timeline';
 import type { ProjectSession } from '@/lib/project-session';
 
 const LOW = 0,
@@ -50,6 +51,7 @@ export function PianoRoll({
   clip,
   track,
   session,
+  positionBeats,
   close,
   report,
   disabled,
@@ -57,6 +59,7 @@ export function PianoRoll({
   clip: Clip;
   track: Track;
   session: ProjectSession;
+  positionBeats: number;
   close: () => void;
   report: (text: string) => void;
   disabled: boolean;
@@ -83,7 +86,11 @@ export function PianoRoll({
     additive: boolean;
   } | null>(null);
   const [grid, setStep] = useState(0.25);
-  const step = Math.min(grid, clip.lengthBeats ?? 4);
+  const step = Math.min(grid || 0.25, clip.lengthBeats ?? 4);
+  const snapLocal = useCallback(
+    (beat: number) => (grid > 0 ? Math.round(beat / step) * step : beat),
+    [grid, step],
+  );
   const [velocity, setVelocity] = useState(100);
   const [keyboard, setKeyboard] = useState(false);
   const [capture, setCapture] = useState(false);
@@ -117,6 +124,10 @@ export function PianoRoll({
   );
   const notes = clip.notes ?? [];
   const length = clip.lengthBeats ?? 4;
+  const seekProjectBeat = (beat: number) =>
+    session.engine.seek(
+      beatsToSeconds(beat, session.getSnapshot().project.tempo),
+    );
   useEffect(() => {
     if (disabled) {
       held.current.forEach((n) => n.release?.());
@@ -171,10 +182,7 @@ export function PianoRoll({
       const pending = {
         started: performance.now(),
         captureEligible: at >= 0 && at < length,
-        beat: Math.max(
-          0,
-          Math.min(length - step, Math.round(at / step) * step),
-        ),
+        beat: Math.max(0, Math.min(length - step, snapLocal(at))),
         pitch,
         velocity: vel,
       };
@@ -194,7 +202,17 @@ export function PianoRoll({
           ),
         );
     },
-    [session, track.id, clip.startBeat, cursor, length, step, disabled, report],
+    [
+      session,
+      track.id,
+      clip.startBeat,
+      cursor,
+      length,
+      step,
+      disabled,
+      report,
+      snapLocal,
+    ],
   );
   const release = useCallback(
     (id: string) => {
@@ -209,13 +227,11 @@ export function PianoRoll({
         !id.startsWith('preview:')
       ) {
         const tempo = session.getSnapshot().project.tempo;
+        const heldBeats =
+          (((performance.now() - heldNote.started) / 1000) * tempo) / 60;
         const duration = Math.max(
-          step,
-          Math.round(
-            (((performance.now() - heldNote.started) / 1000) * tempo) /
-              60 /
-              step,
-          ) * step,
+          grid > 0 ? step : 0.001,
+          grid > 0 ? Math.round(heldBeats / step) * step : heldBeats,
         );
         const note: MidiNote = {
           id: crypto.randomUUID(),
@@ -229,7 +245,7 @@ export function PianoRoll({
         setCursor(Math.min(length - step, note.start + note.length));
       }
     },
-    [session, capture, disabled, step, length, commit, setSelected],
+    [session, capture, disabled, step, length, commit, setSelected, grid],
   );
   const inputHandlers = useRef({ press, release });
   useEffect(() => {
@@ -326,10 +342,7 @@ export function PianoRoll({
     const next: MidiNote = {
       id: crypto.randomUUID(),
       pitch: Math.max(0, Math.min(127, pitch)),
-      start: Math.max(
-        0,
-        Math.min(length - step, Math.floor(start / step) * step),
-      ),
+      start: Math.max(0, Math.min(length - step, snapLocal(start))),
       length: step,
       velocity,
     };
@@ -398,14 +411,10 @@ export function PianoRoll({
     )
       return;
     const dx = (event.clientX - drag.x) / PX;
-    const delta =
-      Math.round(
-        ((drag.resize ? drag.note.length : drag.note.start) + dx) / step,
-      ) *
-        step -
-      (drag.resize ? drag.note.length : drag.note.start);
+    const anchor = drag.resize ? drag.note.length : drag.note.start;
+    const delta = snapLocal(anchor + dx) - anchor;
     const next = drag.resize
-      ? resizeNotes(drag.notes, delta, length, step)
+      ? resizeNotes(drag.notes, delta, length, grid > 0 ? step : 0.001)
       : moveNotes(
           drag.notes,
           delta,
@@ -629,11 +638,20 @@ export function PianoRoll({
         <Choice
           id="note-grid"
           label="Grid"
-          value={String(step)}
-          options={[0.0625, 0.125, 0.25, 0.5, 1].map((value) => ({
-            value: String(value),
-            label: `1/${4 / value}`,
-          }))}
+          value={String(grid)}
+          options={[0, 4, 2, 1, 0.5, 0.25, 0.125, 0.0625, 2 / 3, 1 / 3].map(
+            (value) => ({
+              value: String(value),
+              label:
+                value === 0
+                  ? 'Off'
+                  : value === 2 / 3
+                    ? '1/4 triplet'
+                    : value === 1 / 3
+                      ? '1/8 triplet'
+                      : `1/${4 / value}`,
+            }),
+          )}
           onChange={(v) => setStep(Number(v))}
         />
         <NumberField
@@ -668,7 +686,7 @@ export function PianoRoll({
         <NumberField
           label="Length"
           value={note?.length ?? step}
-          min={step}
+          min={grid > 0 ? Math.min(step, note?.length ?? step) : 0.001}
           max={length - (note?.start ?? cursor)}
           step={step}
           disabled={!note}
@@ -703,214 +721,241 @@ export function PianoRoll({
       <div className="piano-scroll" ref={scroll}>
         <div
           className="piano-surface"
-          style={{ width: 55 + length * PX, height: (HIGH - LOW + 1) * ROW }}
+          style={{
+            width: 55 + length * PX,
+            height: (HIGH - LOW + 1) * ROW + 24,
+          }}
         >
-          <div className="piano-keys">
-            {Array.from({ length: HIGH - LOW + 1 }, (_, i) => {
-              const pitch = HIGH - i;
-              return (
-                <button
-                  key={pitch}
-                  className={
-                    [1, 3, 6, 8, 10].includes(pitch % 12)
-                      ? 'black-key'
-                      : 'white-key'
-                  }
-                  style={{ top: i * ROW, height: ROW }}
-                  aria-label={`Play ${noteName(pitch)}`}
-                  onPointerDown={(event) => {
-                    if (event.button !== 0) return;
-                    event.currentTarget.setPointerCapture(event.pointerId);
-                    press(`piano:${pitch}`, pitch, velocity);
-                  }}
-                  onPointerUp={() => release(`piano:${pitch}`)}
-                  onPointerCancel={() => release(`piano:${pitch}`)}
-                >
-                  {noteName(pitch)}
-                </button>
-              );
-            })}
+          <div className="piano-ruler-row">
+            <div className="piano-ruler-corner">BEATS</div>
+            <PianoTimeline
+              clip={clip}
+              positionBeats={positionBeats}
+              zoom={PX}
+              division={grid}
+              disabled={disabled}
+              seek={seekProjectBeat}
+              variant="ruler"
+            />
           </div>
-          <EditMenu
-            actions={[
-              { label: 'Paste notes at cursor', action: paste },
-              {
-                label: 'Select all notes',
-                action: () => setSelection(notes.map((n) => n.id)),
-              },
-              { label: 'Add C4 at cursor', action: () => add(cursor, 60) },
-            ]}
+          <div
+            className="piano-note-area"
+            style={{ height: (HIGH - LOW + 1) * ROW }}
           >
-            <div
-              className="note-grid"
-              style={
-                {
-                  left: 55,
-                  width: length * PX,
-                  height: '100%',
-                  '--note-step': `${step * PX}px`,
-                  '--quarter-width': `${PX}px`,
-                } as React.CSSProperties
-              }
-              tabIndex={-1}
-              aria-label="Piano roll note grid"
-              onContextMenu={(event) => {
-                if (event.target !== event.currentTarget) return;
-                const rect = event.currentTarget.getBoundingClientRect();
-                setCursor(
-                  Math.max(
-                    0,
-                    Math.min(
-                      length - step,
-                      Math.floor((event.clientX - rect.left) / PX / step) *
-                        step,
-                    ),
-                  ),
-                );
-              }}
-              onPointerDown={(event) => {
-                if (
-                  disabled ||
-                  event.button !== 0 ||
-                  event.target !== event.currentTarget
-                )
-                  return;
-                event.preventDefault();
-                event.currentTarget.focus();
-                event.currentTarget.setPointerCapture(event.pointerId);
-                const rect = event.currentTarget.getBoundingClientRect();
-                const x = Math.max(0, event.clientX - rect.left),
-                  y = Math.max(0, event.clientY - rect.top);
-                const additive =
-                  event.ctrlKey || event.metaKey || event.shiftKey;
-                boxDrag.current = {
-                  x,
-                  y,
-                  base: additive ? selection : [],
-                  moved: false,
-                  additive,
-                };
-                setCursor(
-                  Math.max(
-                    0,
-                    Math.min(length - step, Math.floor(x / PX / step) * step),
-                  ),
-                );
-                if (!additive) setSelection([]);
-              }}
-              onPointerMove={boxMove}
-              onPointerUp={boxEnd}
-              onPointerCancel={() => {
-                const drag = boxDrag.current;
-                if (drag) setSelection(drag.base);
-                boxDrag.current = null;
-                setBox(null);
-              }}
-            >
-              {notes.map((original) => {
-                const n = previewById.get(original.id) ?? original;
+            <div className="piano-keys">
+              {Array.from({ length: HIGH - LOW + 1 }, (_, i) => {
+                const pitch = HIGH - i;
                 return (
-                  <EditMenu
-                    key={n.id}
-                    actions={[
-                      {
-                        label: 'Cut selected notes',
-                        action: () => copy(groupFor(n), true),
-                        disabled,
-                      },
-                      {
-                        label: 'Copy selected notes',
-                        action: () => copy(groupFor(n)),
-                        disabled,
-                      },
-                      {
-                        label: 'Paste notes at cursor',
-                        action: paste,
-                        disabled,
-                      },
-                      {
-                        label: 'Duplicate selected notes',
-                        action: () => duplicate(groupFor(n)),
-                        disabled,
-                      },
-                      {
-                        label: 'Delete selected notes',
-                        action: () => remove(groupFor(n)),
-                        destructive: true,
-                        disabled,
-                      },
-                    ]}
+                  <button
+                    key={pitch}
+                    className={
+                      [1, 3, 6, 8, 10].includes(pitch % 12)
+                        ? 'black-key'
+                        : 'white-key'
+                    }
+                    style={{ top: i * ROW, height: ROW }}
+                    aria-label={`Play ${noteName(pitch)}`}
+                    onPointerDown={(event) => {
+                      if (event.button !== 0) return;
+                      event.currentTarget.setPointerCapture(event.pointerId);
+                      press(`piano:${pitch}`, pitch, velocity);
+                    }}
+                    onPointerUp={() => release(`piano:${pitch}`)}
+                    onPointerCancel={() => release(`piano:${pitch}`)}
                   >
-                    <button
-                      className={`midi-note ${selectedIds.has(n.id) ? 'selected-note' : ''}`}
-                      style={{
-                        left: n.start * PX,
-                        top: (HIGH - n.pitch) * ROW,
-                        width: Math.max(5, n.length * PX),
-                        height: ROW - 1,
-                        opacity: 0.4 + (n.velocity / 127) * 0.6,
-                      }}
-                      title={`${noteName(n.pitch)} · velocity ${n.velocity}`}
-                      aria-label={`${noteName(n.pitch)}, velocity ${n.velocity}, length ${n.length} beats`}
-                      aria-pressed={selectedIds.has(n.id)}
-                      onContextMenu={() => {
-                        if (!selectedIds.has(n.id)) setSelected(n.id);
-                      }}
-                      onPointerDown={(event) => {
-                        if (disabled || event.button !== 0) return;
-                        event.preventDefault();
-                        event.stopPropagation();
-                        event.currentTarget.focus();
-                        event.currentTarget.setPointerCapture(event.pointerId);
-                        if (event.ctrlKey || event.metaKey) {
-                          setSelection((ids) =>
-                            ids.includes(n.id)
-                              ? ids.filter((id) => id !== n.id)
-                              : [...ids, n.id],
-                          );
-                          return;
-                        }
-                        const group = groupFor(original);
-                        if (!selectedIds.has(n.id)) setSelected(n.id);
-                        setCursor(n.start);
-                        noteDrag.current = {
-                          note: original,
-                          notes: group,
-                          x: event.clientX,
-                          y: event.clientY,
-                          resize: (
-                            event.target as HTMLElement
-                          ).classList.contains('note-tail'),
-                        };
-                      }}
-                      onPointerMove={dragMove}
-                      onPointerUp={endDrag}
-                      onPointerCancel={() => {
-                        noteDrag.current = null;
-                        previewRef.current = null;
-                        setPreview(null);
-                      }}
-                    >
-                      <span>{noteName(n.pitch)}</span>
-                      <i className="note-tail" />
-                    </button>
-                  </EditMenu>
+                    {noteName(pitch)}
+                  </button>
                 );
               })}
-              {box && (
+            </div>
+            <EditMenu
+              actions={[
+                { label: 'Paste notes at cursor', action: paste },
+                {
+                  label: 'Select all notes',
+                  action: () => setSelection(notes.map((n) => n.id)),
+                },
+                { label: 'Add C4 at cursor', action: () => add(cursor, 60) },
+              ]}
+            >
+              <div
+                className="note-grid"
+                style={
+                  {
+                    left: 55,
+                    width: length * PX,
+                    height: '100%',
+                    '--note-step': `${(grid > 0 ? step : 1) * PX}px`,
+                    '--quarter-width': `${PX}px`,
+                  } as React.CSSProperties
+                }
+                tabIndex={-1}
+                aria-label="Piano roll note grid"
+                onContextMenu={(event) => {
+                  if (event.target !== event.currentTarget) return;
+                  const rect = event.currentTarget.getBoundingClientRect();
+                  setCursor(
+                    Math.max(
+                      0,
+                      Math.min(
+                        length - step,
+                        snapLocal((event.clientX - rect.left) / PX),
+                      ),
+                    ),
+                  );
+                }}
+                onPointerDown={(event) => {
+                  if (
+                    disabled ||
+                    event.button !== 0 ||
+                    event.target !== event.currentTarget
+                  )
+                    return;
+                  event.preventDefault();
+                  event.currentTarget.focus();
+                  event.currentTarget.setPointerCapture(event.pointerId);
+                  const rect = event.currentTarget.getBoundingClientRect();
+                  const x = Math.max(0, event.clientX - rect.left),
+                    y = Math.max(0, event.clientY - rect.top);
+                  const additive =
+                    event.ctrlKey || event.metaKey || event.shiftKey;
+                  boxDrag.current = {
+                    x,
+                    y,
+                    base: additive ? selection : [],
+                    moved: false,
+                    additive,
+                  };
+                  setCursor(
+                    Math.max(0, Math.min(length - step, snapLocal(x / PX))),
+                  );
+                  if (!additive) setSelection([]);
+                }}
+                onPointerMove={boxMove}
+                onPointerUp={boxEnd}
+                onPointerCancel={() => {
+                  const drag = boxDrag.current;
+                  if (drag) setSelection(drag.base);
+                  boxDrag.current = null;
+                  setBox(null);
+                }}
+              >
+                {notes.map((original) => {
+                  const n = previewById.get(original.id) ?? original;
+                  return (
+                    <EditMenu
+                      key={n.id}
+                      actions={[
+                        {
+                          label: 'Cut selected notes',
+                          action: () => copy(groupFor(n), true),
+                          disabled,
+                        },
+                        {
+                          label: 'Copy selected notes',
+                          action: () => copy(groupFor(n)),
+                          disabled,
+                        },
+                        {
+                          label: 'Paste notes at cursor',
+                          action: paste,
+                          disabled,
+                        },
+                        {
+                          label: 'Duplicate selected notes',
+                          action: () => duplicate(groupFor(n)),
+                          disabled,
+                        },
+                        {
+                          label: 'Delete selected notes',
+                          action: () => remove(groupFor(n)),
+                          destructive: true,
+                          disabled,
+                        },
+                      ]}
+                    >
+                      <button
+                        className={`midi-note ${selectedIds.has(n.id) ? 'selected-note' : ''}`}
+                        style={{
+                          left: n.start * PX,
+                          top: (HIGH - n.pitch) * ROW,
+                          width: Math.max(5, n.length * PX),
+                          height: ROW - 1,
+                          opacity: 0.4 + (n.velocity / 127) * 0.6,
+                        }}
+                        title={`${noteName(n.pitch)} · velocity ${n.velocity}`}
+                        aria-label={`${noteName(n.pitch)}, velocity ${n.velocity}, length ${n.length} beats`}
+                        aria-pressed={selectedIds.has(n.id)}
+                        onContextMenu={() => {
+                          if (!selectedIds.has(n.id)) setSelected(n.id);
+                        }}
+                        onPointerDown={(event) => {
+                          if (disabled || event.button !== 0) return;
+                          event.preventDefault();
+                          event.stopPropagation();
+                          event.currentTarget.focus();
+                          event.currentTarget.setPointerCapture(
+                            event.pointerId,
+                          );
+                          if (event.ctrlKey || event.metaKey) {
+                            setSelection((ids) =>
+                              ids.includes(n.id)
+                                ? ids.filter((id) => id !== n.id)
+                                : [...ids, n.id],
+                            );
+                            return;
+                          }
+                          const group = groupFor(original);
+                          if (!selectedIds.has(n.id)) setSelected(n.id);
+                          setCursor(n.start);
+                          noteDrag.current = {
+                            note: original,
+                            notes: group,
+                            x: event.clientX,
+                            y: event.clientY,
+                            resize: (
+                              event.target as HTMLElement
+                            ).classList.contains('note-tail'),
+                          };
+                        }}
+                        onPointerMove={dragMove}
+                        onPointerUp={endDrag}
+                        onPointerCancel={() => {
+                          noteDrag.current = null;
+                          previewRef.current = null;
+                          setPreview(null);
+                        }}
+                      >
+                        <span>{noteName(n.pitch)}</span>
+                        <i className="note-tail" />
+                      </button>
+                    </EditMenu>
+                  );
+                })}
+                {box && (
+                  <div
+                    className="note-selection-box"
+                    style={box}
+                    aria-hidden="true"
+                  />
+                )}
                 <div
-                  className="note-selection-box"
-                  style={box}
+                  className="note-cursor"
+                  style={{ left: cursor * PX }}
                   aria-hidden="true"
                 />
-              )}
-              <div
-                className="note-cursor"
-                style={{ left: cursor * PX }}
-                aria-hidden="true"
-              />
-            </div>
-          </EditMenu>
+              </div>
+            </EditMenu>
+            <PianoTimeline
+              clip={clip}
+              positionBeats={positionBeats}
+              zoom={PX}
+              division={grid}
+              disabled={disabled}
+              seek={seekProjectBeat}
+              variant="playhead"
+            />
+          </div>
         </div>
       </div>
       <div className="piano-footer">

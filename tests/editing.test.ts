@@ -1,6 +1,9 @@
 import { beforeEach, test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  trimClip,
+  clipPlayhead,
+  seekClipBeat,
   moveNotes,
   resizeNotes,
   pasteNotes,
@@ -12,6 +15,8 @@ import {
   newTrack,
   parseProject,
   clipEndBeat,
+  snapBeat,
+  beatsToSeconds,
   type Clip,
 } from '../lib/project.ts';
 import { validateNotes, type MidiNote } from '../lib/midi.ts';
@@ -223,4 +228,150 @@ void test('note clipboard survives switching clips and stores an independent sna
   assert.doesNotThrow(() => parseProject(session.serialize()));
   session.reset();
   assert.deepEqual(session.copiedNotes(), []);
+});
+
+void test('audio left-edge trims keep the end fixed and can recover earlier source audio', () => {
+  const original = audio();
+  const shorter = trimClip(original, 'left', 6, 120, 10);
+  assert.equal(shorter.startBeat, 6);
+  assert.equal(shorter.offsetSeconds, 3);
+  assert.equal(shorter.durationSeconds, 7);
+  assert.equal(clipEndBeat(shorter, 120), clipEndBeat(original, 120));
+  const extended = trimClip(shorter, 'left', -100, 120, 10);
+  assert.equal(extended.startBeat, 0);
+  assert.equal(extended.offsetSeconds, 0);
+  assert.equal(extended.durationSeconds, 10);
+  assert.equal(original.offsetSeconds, 2);
+});
+
+void test('both audio edges respect the source boundaries and project start', () => {
+  const original = audio();
+  assert.equal(trimClip(original, 'right', 9999, 120, 10).durationSeconds, 8);
+  const shorter = trimClip(original, 'right', 6, 120, 10);
+  assert.equal(shorter.durationSeconds, 1);
+  assert.equal(trimClip(shorter, 'right', 9999, 120, 10).durationSeconds, 8);
+  const atStart = trimClip(
+    { ...original, startBeat: 1 },
+    'left',
+    -999,
+    120,
+    10,
+  );
+  assert.equal(atStart.startBeat, 0);
+  assert.equal(atStart.offsetSeconds, 1.5);
+  for (const side of ['left', 'right'] as const) {
+    const result = trimClip(original, side, 999999, 120, 10);
+    assert.ok(result.durationSeconds > 0);
+    assert.ok(result.offsetSeconds >= 0);
+    assert.ok(result.offsetSeconds + result.durationSeconds <= 10);
+  }
+  assert.throws(() => trimClip(original, 'right', 8, 120), /source/);
+});
+
+void test('sub-millisecond audio tails never extend beyond the source', () => {
+  const result = trimClip(
+    { ...audio(), offsetSeconds: 9.9995, durationSeconds: 0.001 },
+    'right',
+    100,
+    120,
+    10,
+  );
+  assert.ok(result.durationSeconds > 0);
+  assert.ok(result.offsetSeconds + result.durationSeconds <= 10);
+});
+
+void test('MIDI trimming rebases crossing notes while extension preserves their absolute positions', () => {
+  const original: Clip = {
+    ...audio(),
+    kind: 'midi',
+    startBeat: 8,
+    assetId: '',
+    offsetSeconds: 0,
+    durationSeconds: 1,
+    lengthBeats: 4,
+    notes: chord(),
+  };
+  const left = trimClip(original, 'left', 10, 120);
+  assert.equal(left.lengthBeats, 2);
+  assert.deepEqual(
+    left.notes!.map((n) => [n.pitch, n.start, n.length]),
+    [
+      [64, 0, 1.5],
+      [67, 0, 0.5],
+    ],
+  );
+  const right = trimClip(original, 'right', 9.75, 120);
+  assert.deepEqual(
+    right.notes!.map((n) => [n.start, n.length]),
+    [
+      [1, 0.75],
+      [1.5, 0.25],
+    ],
+  );
+  const extended = trimClip(original, 'left', 6, 120);
+  assert.equal(extended.lengthBeats, 6);
+  assert.deepEqual(
+    extended.notes!.map((n) => extended.startBeat + n.start),
+    original.notes!.map((n) => original.startBeat + n.start),
+  );
+  assert.equal(trimClip(original, 'right', 1e6, 120).lengthBeats, 4096);
+  assert.equal(trimClip(original, 'right', 0, 120).lengthBeats, 0.0625);
+  for (const clip of [left, right, extended])
+    assert.doesNotThrow(() => validateNotes(clip.notes, clip.lengthBeats!));
+});
+
+void test('trims survive save/open and undo restores the original source window', async () => {
+  const session = new ProjectSession();
+  const track = session.getSnapshot().project.tracks[0];
+  const [id] = await session.importFiles(
+    [new File([wavFile()], 'audio.wav')],
+    track.id,
+    4,
+  );
+  const original = session.getSnapshot().project.tracks[0].clips[0];
+  const trimmed = trimClip(original, 'left', 8, 120, 10);
+  session.edit((p) => ({
+    ...p,
+    tracks: p.tracks.map((t) =>
+      t.id === track.id ? { ...t, clips: [trimmed] } : t,
+    ),
+  }));
+  const reopened = new ProjectSession();
+  await reopened.open(new File([session.serialize()], 'trim.mnt'));
+  assert.equal(
+    reopened.getSnapshot().project.tracks[0].clips[0].offsetSeconds,
+    2,
+  );
+  assert.equal(reopened.getSnapshot().project.tracks[0].clips[0].id, id);
+  session.undo();
+  assert.deepEqual(session.getSnapshot().project.tracks[0].clips[0], original);
+});
+
+void test('straight and triplet snap divisions quantize beat positions, with exact free positioning when off', () => {
+  assert.equal(snapBeat(2.37, true, 0.25), 2.25);
+  assert.equal(snapBeat(2.38, true, 0.25), 2.5);
+  assert.equal(snapBeat(0.36, true, 1 / 3), 1 / 3);
+  assert.equal(snapBeat(0.36, false, 0.25), 0.36);
+  assert.equal(snapBeat(0.36, true, 0), 0.36);
+  assert.equal(snapBeat(-1, true, 0.25), 0);
+});
+
+void test('piano playheads use clip-local beats and seeking translates back to the project clock', () => {
+  const clip: Clip = {
+    ...audio(),
+    kind: 'midi',
+    startBeat: 40,
+    lengthBeats: 8,
+  };
+  assert.equal(clipPlayhead(clip, 39), null);
+  assert.equal(clipPlayhead(clip, 40), 0);
+  assert.equal(clipPlayhead(clip, 42.5), 2.5);
+  assert.equal(clipPlayhead(clip, 48), 8);
+  assert.equal(clipPlayhead(clip, 49), null);
+  assert.equal(seekClipBeat(clip, 0.38, 0.25), 40.5);
+  assert.equal(seekClipBeat(clip, -2, 0.25), 40);
+  assert.equal(seekClipBeat(clip, 100, 0.25), 48);
+  assert.equal(seekClipBeat(clip, 0.38, 0), 40.38);
+  assert.equal(beatsToSeconds(seekClipBeat(clip, 2, 0.25), 120), 21);
+  assert.equal(beatsToSeconds(seekClipBeat(clip, 2, 0.25), 60), 42);
 });

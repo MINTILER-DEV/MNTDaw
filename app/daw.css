@@ -2284,3 +2284,123 @@ kbd {
   height: 25px;
   width: 25px;
 }
+.clip-trim-left {
+  left: 0;
+  right: auto;
+}
+.clip-trim {
+  width: 10px;
+  z-index: 4;
+  touch-action: none;
+}
+.clip-midi {
+  pointer-events: none;
+}
+.timeline-playhead {
+  pointer-events: auto;
+  width: 11px;
+  transform: translateX(-5px);
+  cursor: ew-resize;
+  touch-action: none;
+  border: 0;
+  padding: 0;
+  background: linear-gradient(
+    to right,
+    transparent 5px,
+    #dbead1 5px,
+    #dbead1 6px,
+    transparent 6px
+  );
+  box-shadow: none;
+}
+.arrangement-snap {
+  width: 96px;
+  flex-shrink: 0;
+}
+.arrangement-snap .setting-field > label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+}
+.arrangement-snap .setting-select {
+  min-height: 28px;
+  height: 28px;
+  font-size: 10px;
+}
+.piano-ruler-row {
+  display: flex;
+  height: 24px;
+  position: sticky;
+  top: 0;
+  z-index: 7;
+  background: #293930;
+}
+.piano-ruler-corner {
+  position: sticky;
+  left: 0;
+  z-index: 8;
+  width: 55px;
+  flex-shrink: 0;
+  background: #35483b;
+  font: 7px var(--font-mono);
+  padding: 8px 6px;
+  color: #b2c7a9;
+}
+.piano-ruler {
+  position: relative;
+  flex-shrink: 0;
+  height: 24px;
+  text-align: left;
+  cursor: ew-resize;
+  touch-action: none;
+  overflow: hidden;
+}
+.piano-ruler > span {
+  position: absolute;
+  top: 3px;
+  border-left: 1px solid #72846b;
+  padding-left: 4px;
+  font: 9px var(--font-mono);
+  color: #bdcdb3;
+  pointer-events: none;
+}
+.piano-ruler-head {
+  position: absolute;
+  top: 13px;
+  width: 10px;
+  height: 10px;
+  transform: translateX(-5px);
+  background: #e3f4c8;
+  clip-path: polygon(0 0, 100% 0, 50% 100%);
+  pointer-events: none;
+}
+.piano-note-area {
+  position: relative;
+}
+.piano-playhead {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  z-index: 4;
+  width: 11px;
+  transform: translateX(-5px);
+  background: linear-gradient(
+    to right,
+    transparent 5px,
+    #e3f4c8 5px,
+    #e3f4c8 6px,
+    transparent 6px
+  );
+  padding: 0;
+  border: 0;
+  touch-action: none;
+  cursor: ew-resize;
+}
+.piano-keys {
+  z-index: 5;
+}
+.note-cursor {
+  opacity: 0.35;
+}

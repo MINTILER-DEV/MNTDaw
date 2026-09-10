@@ -70,6 +70,7 @@ import {
   type Signature,
   type SignatureMarker,
 } from '@/lib/time-signatures';
+import { trimClip } from '@/lib/editing';
 import { ProjectSession } from '@/lib/project-session';
 import {
   beatsToSeconds,
@@ -77,7 +78,7 @@ import {
   clipEndBeat,
   newTrack,
   projectLength,
-  snapBeat,
+  snapBeat as quantizeBeat,
   type Clip,
   type Track,
 } from '@/lib/project';
@@ -93,7 +94,8 @@ type Drag = {
   y: number;
   start: number;
   duration: number;
-  mode: 'move' | 'trim';
+  mode: 'move' | 'left' | 'right';
+  updated?: Clip;
   moved: boolean;
 };
 
@@ -167,6 +169,12 @@ export default function Daw() {
     () => window.matchMedia('(min-width: 1101px)').matches,
   );
   const [snap, setSnap] = useState(true);
+  const [snapDivision, setSnapDivision] = useState(1);
+  const snapBeat = useCallback(
+    (beat: number, enabled: boolean) =>
+      quantizeBeat(beat, enabled, snapDivision),
+    [snapDivision],
+  );
   const [zoom, setZoom] = useState(26);
   const [drag, setDrag] = useState<Drag | null>(null);
   const dragRef = useRef<Drag | null>(null);
@@ -305,6 +313,30 @@ export default function Daw() {
     engine.seek(
       beatsToSeconds(Math.max(0, Math.min(length, nextBeat)), project.tempo),
     );
+  const seekPointer = (event: ReactPointerEvent) => {
+    const content = event.currentTarget.closest<HTMLElement>(
+      '.arrangement-content',
+    );
+    if (!content || busyRef.current) return;
+    seek(
+      snapBeat(
+        (event.clientX - content.getBoundingClientRect().left - HEADER_WIDTH) /
+          zoom,
+        snap,
+      ),
+    );
+  };
+  const capturePlayhead = (event: ReactPointerEvent) => {
+    if (event.button !== 0 || busyRef.current) return;
+    event.preventDefault();
+    event.stopPropagation();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    seekPointer(event);
+  };
+  const dragPlayhead = (event: ReactPointerEvent) => {
+    if (event.currentTarget.hasPointerCapture(event.pointerId))
+      seekPointer(event);
+  };
   const changeTrack = (id: string, update: Partial<Track>) =>
     session.edit((previous) => ({
       ...previous,
@@ -540,7 +572,9 @@ export default function Daw() {
         event.code === 'Space' &&
         !event.repeat &&
         (!target.closest('button') ||
-          target.closest('.arrangement-clip, .bar-ruler, [data-piano-roll]'))
+          target.closest(
+            '.arrangement-clip, .bar-ruler, .timeline-playhead, [data-piano-roll]',
+          ))
       ) {
         event.preventDefault();
         if (engine.getSnapshot().status === 'playing') engine.pause();
@@ -572,16 +606,17 @@ export default function Daw() {
     beat,
     signatureEdit,
     snap,
+    snapBeat,
   ]);
 
   const startDrag = (
     event: ReactPointerEvent,
     clip: Clip,
     track: Track,
-    mode: 'move' | 'trim',
+    mode: 'move' | 'left' | 'right',
   ) => {
     if (busyRef.current || event.button !== 0) return;
-    event.preventDefault();
+    if (mode !== 'move') event.preventDefault();
     event.stopPropagation();
     const element =
       event.currentTarget.closest<HTMLButtonElement>('.arrangement-clip')!;
@@ -644,30 +679,23 @@ export default function Daw() {
           next.targetId = target.id;
       }
     } else {
-      const endBeat = snapBeat(
-        clipEndBeat(clip, project.tempo) + dx / zoom,
-        snap,
+      const edge =
+        origin.mode === 'left'
+          ? clip.startBeat
+          : clipEndBeat(clip, project.tempo);
+      const updated = trimClip(
+        clip,
+        origin.mode,
+        snapBeat(edge + dx / zoom, snap),
+        project.tempo,
+        session.assets.get(clip.assetId)?.buffer.duration,
       );
-      const available =
-        clip.kind === 'midi'
-          ? beatsToSeconds(4096, project.tempo)
-          : session.assets.get(clip.assetId)!.buffer.duration -
-            clip.offsetSeconds;
-      next.duration = Math.min(
-        available,
-        Math.max(
-          clip.kind === 'midi'
-            ? beatsToSeconds(
-                Math.max(
-                  0.0625,
-                  ...(clip.notes ?? []).map((n) => n.start + n.length),
-                ),
-                project.tempo,
-              )
-            : Math.min(0.01, available),
-          beatsToSeconds(endBeat - clip.startBeat, project.tempo),
-        ),
-      );
+      next.updated = updated;
+      next.start = updated.startBeat;
+      next.duration =
+        updated.kind === 'midi'
+          ? beatsToSeconds(updated.lengthBeats ?? 4, project.tempo)
+          : updated.durationSeconds;
     }
     dragRef.current = next;
     setDrag(next);
@@ -682,13 +710,7 @@ export default function Daw() {
         .flatMap((track) => track.clips)
         .find((clip) => clip.id === next.clipId);
       if (!original) return previous;
-      const updated = {
-        ...original,
-        startBeat: next.start,
-        ...(original.kind === 'midi'
-          ? { lengthBeats: secondsToBeats(next.duration, previous.tempo) }
-          : { durationSeconds: next.duration }),
-      };
+      const updated = next.updated ?? { ...original, startBeat: next.start };
       return {
         ...previous,
         tracks: previous.tracks.map((track) => ({
@@ -1026,8 +1048,29 @@ export default function Daw() {
           >
             <Magnet size={14} />
             <span>Snap</span>
-            <span className="snap-value">1 beat</span>
           </button>
+          <div className="arrangement-snap">
+            <Choice
+              id="arrangement-snap"
+              label="Arrangement snap"
+              value={String(snapDivision)}
+              options={[
+                { value: '4', label: '1/1 note' },
+                { value: '2', label: '1/2 note' },
+                { value: '1', label: '1/4 note' },
+                { value: '.5', label: '1/8 note' },
+                { value: '.25', label: '1/16 note' },
+                { value: '.125', label: '1/32 note' },
+                { value: '.0625', label: '1/64 note' },
+                { value: String(2 / 3), label: '1/4 triplet' },
+                { value: String(1 / 3), label: '1/8 triplet' },
+              ].map((option) => ({
+                ...option,
+                value: String(Number(option.value)),
+              }))}
+              onChange={(value) => setSnapDivision(Number(value))}
+            />
+          </div>
           <span className="zoom-controls">
             <IconButton
               label="Zoom out"
@@ -1193,7 +1236,7 @@ export default function Daw() {
                 {
                   width: HEADER_WIDTH + timelineWidth,
                   minHeight: '100%',
-                  '--beat-width': `${zoom}px`,
+                  '--beat-width': `${zoom * (snap ? snapDivision : 1)}px`,
                   '--bar-width': `${zoom * 4}px`,
                 } as CSSProperties
               }
@@ -1235,18 +1278,19 @@ export default function Daw() {
                     aria-label="Seek on bar ruler"
                     style={{ width: timelineWidth }}
                     disabled={!!busy}
-                    onPointerDown={(event) => {
-                      if (busyRef.current) return;
-                      const rect = event.currentTarget.getBoundingClientRect();
-                      seek(snapBeat((event.clientX - rect.left) / zoom, snap));
-                    }}
+                    onPointerDown={capturePlayhead}
+                    onPointerMove={dragPlayhead}
                     onKeyDown={(event) => {
                       if (
                         event.key === 'ArrowRight' ||
                         event.key === 'ArrowLeft'
                       ) {
                         event.preventDefault();
-                        seek(beat + (event.key === 'ArrowRight' ? 1 : -1));
+                        seek(
+                          beat +
+                            (event.key === 'ArrowRight' ? 1 : -1) *
+                              (snap ? snapDivision : 0.1),
+                        );
                       }
                     }}
                   >
@@ -1532,6 +1576,7 @@ export default function Daw() {
                       {track.clips.map((clip) => {
                         const asset = session.assets.get(clip.assetId);
                         const moving = drag?.clipId === clip.id ? drag : null;
+                        const displayed = moving?.updated ?? clip;
                         const start = moving?.start ?? clip.startBeat;
                         const duration =
                           moving?.duration ??
@@ -1567,7 +1612,11 @@ export default function Daw() {
                               aria-pressed={selectedClipId === clip.id}
                               disabled={!!busy}
                               onDoubleClick={() => {
-                                if (clip.kind === 'midi') setRoll(true);
+                                if (clip.kind === 'midi') {
+                                  selectClip(clip.id);
+                                  selectTrack(track.id);
+                                  setRoll(true);
+                                }
                               }}
                               onContextMenu={() => {
                                 selectClip(clip.id);
@@ -1597,7 +1646,7 @@ export default function Daw() {
                                       0,
                                       clip.startBeat +
                                         (event.key === 'ArrowRight' ? 1 : -1) *
-                                          (snap ? 1 : 0.1),
+                                          (snap ? snapDivision : 0.1),
                                     ),
                                   });
                                 }
@@ -1618,17 +1667,19 @@ export default function Daw() {
                                   preserveAspectRatio="none"
                                   aria-hidden="true"
                                 >
-                                  {(clip.notes ?? []).map((n) => (
+                                  {(displayed.notes ?? []).map((n) => (
                                     <rect
                                       key={n.id}
                                       x={
-                                        (n.start / (clip.lengthBeats ?? 4)) *
+                                        (n.start /
+                                          (displayed.lengthBeats ?? 4)) *
                                         100
                                       }
                                       y={((127 - n.pitch) / 127) * 42}
                                       width={Math.max(
                                         0.3,
-                                        (n.length / (clip.lengthBeats ?? 4)) *
+                                        (n.length /
+                                          (displayed.lengthBeats ?? 4)) *
                                           100,
                                       )}
                                       height="1.6"
@@ -1639,15 +1690,24 @@ export default function Daw() {
                               {asset && (
                                 <ClipWave
                                   buffer={asset.buffer}
-                                  offset={clip.offsetSeconds}
+                                  offset={displayed.offsetSeconds}
                                   duration={duration}
                                 />
                               )}
                               <span
-                                className="clip-trim"
+                                className="clip-trim clip-trim-left"
+                                title="Drag to shorten or extend clip start"
+                                onPointerDown={(event) =>
+                                  startDrag(event, clip, track, 'left')
+                                }
+                              >
+                                <GripVertical size={12} />
+                              </span>
+                              <span
+                                className="clip-trim clip-trim-right"
                                 title="Drag to trim clip end"
                                 onPointerDown={(event) =>
-                                  startDrag(event, clip, track, 'trim')
+                                  startDrag(event, clip, track, 'right')
                                 }
                               >
                                 <GripVertical size={12} />
@@ -1708,9 +1768,22 @@ export default function Daw() {
                   <i key={b.bar} style={{ left: b.beat * zoom }} />
                 ))}
               </div>
-              <div
+              <button
                 className="timeline-playhead"
-                aria-hidden="true"
+                aria-label="Drag main playhead"
+                disabled={!!busy}
+                onPointerDown={capturePlayhead}
+                onPointerMove={dragPlayhead}
+                onKeyDown={(event) => {
+                  if (['ArrowLeft', 'ArrowRight'].includes(event.key)) {
+                    event.preventDefault();
+                    seek(
+                      beat +
+                        (event.key === 'ArrowRight' ? 1 : -1) *
+                          (snap ? snapDivision : 0.1),
+                    );
+                  }
+                }}
                 style={{
                   left: HEADER_WIDTH + beat * zoom,
                   height: project.tracks.reduce(
@@ -1720,7 +1793,7 @@ export default function Daw() {
                 }}
               >
                 <span />
-              </div>
+              </button>
             </div>
           </div>
           <div className="timeline-footer">
@@ -1730,7 +1803,7 @@ export default function Daw() {
               value={[beat]}
               min={0}
               max={length}
-              step={snap ? 1 : 0.01}
+              step={snap ? snapDivision : 0.01}
               disabled={!!busy}
               onValueChange={(value) =>
                 seek(Array.isArray(value) ? value[0] : value)
@@ -1753,6 +1826,7 @@ export default function Daw() {
               clip={selectedClip}
               track={selectedTrack}
               session={session}
+              positionBeats={beat}
               close={() => setRoll(false)}
               report={report}
               disabled={!!busy}
@@ -1814,7 +1888,7 @@ export default function Daw() {
                 value={selectedClip.startBeat}
                 min={0}
                 max={100000}
-                step={snap ? 1 : 0.1}
+                step={snap ? snapDivision : 0.1}
                 disabled={!!busy}
                 onChange={(startBeat) =>
                   changeClip(selectedClip.id, { startBeat })
@@ -1985,7 +2059,7 @@ export default function Daw() {
                       value={selectedClip.startBeat}
                       min={0}
                       max={100000}
-                      step={snap ? 1 : 0.1}
+                      step={snap ? snapDivision : 0.1}
                       disabled={!!busy}
                       onChange={(startBeat) =>
                         changeClip(selectedClip.id, { startBeat })
@@ -1994,17 +2068,20 @@ export default function Daw() {
                     <NumberField
                       label="Length · beats"
                       value={selectedClip.lengthBeats ?? 4}
-                      min={Math.max(
-                        0.0625,
-                        ...(selectedClip.notes ?? []).map(
-                          (n) => n.start + n.length,
-                        ),
-                      )}
+                      min={0.0625}
                       max={4096}
                       step={0.25}
                       disabled={!!busy}
                       onChange={(lengthBeats) =>
-                        changeClip(selectedClip.id, { lengthBeats })
+                        changeClip(
+                          selectedClip.id,
+                          trimClip(
+                            selectedClip,
+                            'right',
+                            selectedClip.startBeat + lengthBeats,
+                            project.tempo,
+                          ),
+                        )
                       }
                     />
                     <button className="button" onClick={() => setRoll(!roll)}>

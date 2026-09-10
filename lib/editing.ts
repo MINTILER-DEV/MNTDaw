@@ -1,5 +1,80 @@
 import type { MidiNote } from './midi.ts';
-import { beatsToSeconds, clipEndBeat, type Clip } from './project.ts';
+import {
+  beatsToSeconds,
+  secondsToBeats,
+  clipEndBeat,
+  snapBeat,
+  type Clip,
+} from './project.ts';
+
+export function clipPlayhead(clip: Clip, projectBeat: number) {
+  const local = projectBeat - clip.startBeat;
+  return local >= 0 && local <= (clip.lengthBeats ?? 4) ? local : null;
+}
+
+export function seekClipBeat(clip: Clip, localBeat: number, division: number) {
+  return (
+    clip.startBeat +
+    Math.min(clip.lengthBeats ?? 4, snapBeat(localBeat, division > 0, division))
+  );
+}
+
+export function trimClip(
+  clip: Clip,
+  side: 'left' | 'right',
+  beat: number,
+  tempo: number,
+  sourceDuration?: number,
+): Clip {
+  if (!Number.isFinite(beat)) throw new Error('Invalid clip edge position.');
+  const end = clipEndBeat(clip, tempo);
+  if (clip.kind === 'midi') {
+    const start =
+      side === 'left'
+        ? Math.max(0, end - 4096, Math.min(100000, end - 0.0625, beat))
+        : clip.startBeat;
+    const length =
+      side === 'left'
+        ? end - start
+        : Math.max(0.0625, Math.min(4096, beat - start));
+    const delta = start - clip.startBeat;
+    const notes = (clip.notes ?? []).flatMap((note) => {
+      const from = Math.max(0, note.start - delta),
+        to = Math.min(length, note.start + note.length - delta);
+      return to > from ? [{ ...note, start: from, length: to - from }] : [];
+    });
+    return { ...clip, startBeat: start, lengthBeats: length, notes };
+  }
+  if (!Number.isFinite(sourceDuration) || sourceDuration! <= 0)
+    throw new Error('Missing source audio duration.');
+  const available = sourceDuration! - clip.offsetSeconds;
+  if (available <= 0) throw new Error('Clip starts beyond its source audio.');
+  const duration = Math.min(clip.durationSeconds, available);
+  const minimum = Math.min(0.001, duration);
+  if (side === 'right')
+    return {
+      ...clip,
+      durationSeconds: Math.max(
+        minimum,
+        Math.min(available, beatsToSeconds(beat - clip.startBeat, tempo)),
+      ),
+    };
+  const delta = Math.max(
+    -clip.offsetSeconds,
+    beatsToSeconds(-clip.startBeat, tempo),
+    Math.min(
+      duration - minimum,
+      beatsToSeconds(100000 - clip.startBeat, tempo),
+      beatsToSeconds(beat - clip.startBeat, tempo),
+    ),
+  );
+  return {
+    ...clip,
+    startBeat: clip.startBeat + secondsToBeats(delta, tempo),
+    offsetSeconds: Math.max(0, clip.offsetSeconds + delta),
+    durationSeconds: duration - delta,
+  };
+}
 
 export function splitClip(
   clip: Clip,

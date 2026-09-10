@@ -67,8 +67,11 @@ export const beatsToSeconds = (beats: number, tempo: number) =>
   (beats * 60) / tempo;
 export const secondsToBeats = (seconds: number, tempo: number) =>
   (seconds * tempo) / 60;
-export const snapBeat = (beat: number, snap: boolean) =>
-  Math.max(0, snap ? Math.round(beat) : beat);
+export const snapBeat = (beat: number, snap: boolean, division = 1) =>
+  Math.max(
+    0,
+    snap && division > 0 ? Math.round(beat / division) * division : beat,
+  );
 export const clipEndBeat = (clip: Clip, tempo: number) =>
   clip.startBeat +
   (clip.kind === 'midi'
