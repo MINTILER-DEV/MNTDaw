@@ -1,3 +1,4 @@
+import { beatDuration, type TempoSource } from './tempo-map';
 import { Midi } from '@tonejs/midi';
 import { BasicMIDI } from 'spessasynth_core';
 import { WorkletSynthesizer } from 'spessasynth_lib';
@@ -9,11 +10,12 @@ export async function renderInstrument(
   instrument: Instrument,
   notes: MidiNote[],
   beats: number,
-  tempo: number,
+  tempo: TempoSource,
   bank?: ArrayBuffer,
+  startBeat = 0,
 ) {
   const rate = 48000,
-    duration = (beats * 60) / tempo + 2;
+    duration = beatDuration(startBeat, beats, tempo) + 2;
   if (duration > 300)
     throw new Error(
       'SoundFont and VST3 renders support clips up to 5 minutes. Split this clip first.',
@@ -28,15 +30,15 @@ export async function renderInstrument(
       notes: notes.map((note) => ({
         pitch: note.pitch,
         velocity: note.velocity,
-        start: (note.start * 60) / tempo,
-        duration: (note.length * 60) / tempo,
+        start: beatDuration(startBeat, note.start, tempo),
+        duration: beatDuration(startBeat + note.start, note.length, tempo),
       })),
     });
     return context.decodeAudioData(await response.arrayBuffer());
   }
   if (!bank) throw new Error('This instrument is missing its SoundFont.');
   const midi = new Midi();
-  midi.header.setTempo(tempo);
+  midi.header.setTempo(60);
   const track = midi.addTrack();
   track.instrument.number = instrument.program ?? 0;
   track.addCC({
@@ -52,8 +54,16 @@ export async function renderInstrument(
   for (const note of notes)
     track.addNote({
       midi: note.pitch,
-      ticks: Math.round(note.start * midi.header.ppq),
-      durationTicks: Math.max(1, Math.round(note.length * midi.header.ppq)),
+      ticks: Math.round(
+        beatDuration(startBeat, note.start, tempo) * midi.header.ppq,
+      ),
+      durationTicks: Math.max(
+        1,
+        Math.round(
+          beatDuration(startBeat + note.start, note.length, tempo) *
+            midi.header.ppq,
+        ),
+      ),
       velocity: note.velocity / 127,
     });
   const data = Uint8Array.from(midi.toArray()).buffer;

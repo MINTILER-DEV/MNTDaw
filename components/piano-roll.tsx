@@ -21,7 +21,12 @@ import { Choice, IconButton, NumberField } from './daw-controls';
 import { EditMenu } from './edit-menu';
 import { moveNotes, resizeNotes, pasteNotes, notesInBox } from '@/lib/editing';
 import { noteName, type MidiNote } from '@/lib/midi';
-import { beatsToSeconds, type Clip, type Track } from '@/lib/project';
+import {
+  secondsToBeats,
+  beatsToSeconds,
+  type Clip,
+  type Track,
+} from '@/lib/project';
 import { PianoTimeline } from './piano-timeline';
 import type { ProjectSession } from '@/lib/project-session';
 
@@ -125,9 +130,7 @@ export function PianoRoll({
   const notes = clip.notes ?? [];
   const length = clip.lengthBeats ?? 4;
   const seekProjectBeat = (beat: number) =>
-    session.engine.seek(
-      beatsToSeconds(beat, session.getSnapshot().project.tempo),
-    );
+    session.engine.seek(beatsToSeconds(beat, session.getSnapshot().project));
   useEffect(() => {
     if (disabled) {
       held.current.forEach((n) => n.release?.());
@@ -177,7 +180,7 @@ export function PianoRoll({
       const project = session.getSnapshot().project;
       const at =
         session.engine.getSnapshot().status === 'playing'
-          ? (session.engine.position * project.tempo) / 60 - clip.startBeat
+          ? secondsToBeats(session.engine.position, project) - clip.startBeat
           : cursor;
       const pending = {
         started: performance.now(),
@@ -226,9 +229,15 @@ export function PianoRoll({
         heldNote.captureEligible &&
         !id.startsWith('preview:')
       ) {
-        const tempo = session.getSnapshot().project.tempo;
+        const tempo = session.getSnapshot().project;
         const heldBeats =
-          (((performance.now() - heldNote.started) / 1000) * tempo) / 60;
+          secondsToBeats(
+            beatsToSeconds(clip.startBeat + heldNote.beat, tempo) +
+              (performance.now() - heldNote.started) / 1000,
+            tempo,
+          ) -
+          clip.startBeat -
+          heldNote.beat;
         const duration = Math.max(
           grid > 0 ? step : 0.001,
           grid > 0 ? Math.round(heldBeats / step) * step : heldBeats,
@@ -245,7 +254,17 @@ export function PianoRoll({
         setCursor(Math.min(length - step, note.start + note.length));
       }
     },
-    [session, capture, disabled, step, length, commit, setSelected, grid],
+    [
+      session,
+      capture,
+      disabled,
+      step,
+      length,
+      commit,
+      setSelected,
+      grid,
+      clip.startBeat,
+    ],
   );
   const inputHandlers = useRef({ press, release });
   useEffect(() => {

@@ -1,6 +1,8 @@
+import { beatDuration } from './tempo-map.ts';
 import { AudioEngine } from './audio-engine.ts';
 import {
   beatsToSeconds,
+  clipEndBeat,
   secondsToBeats,
   newProject,
   newTrack,
@@ -50,7 +52,7 @@ export class ProjectSession {
     if (!clip) return '';
     if (project.tracks.reduce((sum, t) => sum + t.clips.length, 0) >= 2048)
       throw new Error('Maximum 2048 clips.');
-    const halves = splitClip(clip, beat, project.tempo);
+    const halves = splitClip(clip, beat, project);
     this.edit((p) => ({
       ...p,
       tracks: p.tracks.map((t) =>
@@ -95,10 +97,7 @@ export class ProjectSession {
   private atCursor(project = this.state.project) {
     return {
       ...project,
-      positionBeats: secondsToBeats(
-        this.engine.position,
-        this.state.project.tempo,
-      ),
+      positionBeats: secondsToBeats(this.engine.position, this.state.project),
     };
   }
   private apply(project: Project) {
@@ -106,6 +105,7 @@ export class ProjectSession {
     if (
       old.tracks !== project.tracks ||
       old.tempo !== project.tempo ||
+      old.tempoMarkers !== project.tempoMarkers ||
       this.engine.getSnapshot().duration === 0
     ) {
       this.engine.setArrangement(
@@ -117,24 +117,25 @@ export class ProjectSession {
                   (clip.notes ?? []).map((note) => ({
                     pitch: note.pitch,
                     velocity: note.velocity,
-                    start: beatsToSeconds(
+                    start: beatsToSeconds(clip.startBeat + note.start, project),
+                    duration: beatDuration(
                       clip.startBeat + note.start,
-                      project.tempo,
+                      note.length,
+                      project,
                     ),
-                    duration: beatsToSeconds(note.length, project.tempo),
                   })),
                 )
               : [],
           clips: track.clips.flatMap((clip) => {
             if (clip.kind === 'midi') {
               const buffer = this.renders.get(
-                this.renderKey(track, clip, project.tempo),
+                this.renderKey(track, clip, project),
               );
               return buffer
                 ? [
                     {
                       buffer,
-                      start: beatsToSeconds(clip.startBeat, project.tempo),
+                      start: beatsToSeconds(clip.startBeat, project),
                       offset: 0,
                       duration: buffer.duration,
                     },
@@ -146,20 +147,23 @@ export class ProjectSession {
             return [
               {
                 buffer: asset.buffer,
-                start: beatsToSeconds(clip.startBeat, project.tempo),
+                start: beatsToSeconds(clip.startBeat, project),
                 offset: clip.offsetSeconds,
                 duration: clip.durationSeconds,
               },
             ];
           }),
         })),
-        beatsToSeconds(projectLength(project), project.tempo),
+        beatsToSeconds(projectLength(project), project),
       );
     }
     this.engine.setVolume(project.master.volume);
     this.engine.setMuted(project.master.muted);
-    if (old.tempo !== project.tempo)
-      this.engine.seek(beatsToSeconds(project.positionBeats, project.tempo));
+    if (
+      old.tempo !== project.tempo ||
+      old.tempoMarkers !== project.tempoMarkers
+    )
+      this.engine.seek(beatsToSeconds(project.positionBeats, project));
   }
   edit(change: (project: Project) => Project) {
     const previous = this.atCursor();
@@ -171,9 +175,7 @@ export class ProjectSession {
         (t) =>
           t.kind === 'midi' &&
           t.instrument?.type !== 'synth' &&
-          t.clips.some(
-            (c) => !this.renders.has(this.renderKey(t, c, project.tempo)),
-          ),
+          t.clips.some((c) => !this.renders.has(this.renderKey(t, c, project))),
       )
     )
       this.engine.pause();
@@ -187,7 +189,7 @@ export class ProjectSession {
     if (!previous) return;
     this.redoStack.push(this.atCursor());
     this.apply(previous);
-    this.engine.seek(beatsToSeconds(previous.positionBeats, previous.tempo));
+    this.engine.seek(beatsToSeconds(previous.positionBeats, previous));
     this.notify(previous, true);
   }
   redo() {
@@ -195,7 +197,7 @@ export class ProjectSession {
     if (!next) return;
     this.undoStack.push(this.atCursor());
     this.apply(next);
-    this.engine.seek(beatsToSeconds(next.positionBeats, next.tempo));
+    this.engine.seek(beatsToSeconds(next.positionBeats, next));
     this.notify(next, true);
   }
   reset() {
@@ -293,7 +295,10 @@ export class ProjectSession {
           ...tracks[index],
           clips: [...tracks[index].clips, clip],
         };
-        cursor += secondsToBeats(clip.durationSeconds, project.tempo);
+        cursor = secondsToBeats(
+          beatsToSeconds(cursor, project) + clip.durationSeconds,
+          project,
+        );
       });
       return {
         ...project,
@@ -361,7 +366,7 @@ export class ProjectSession {
     this.undoStack = [];
     this.redoStack = [];
     this.apply(project);
-    this.engine.seek(beatsToSeconds(project.positionBeats, project.tempo));
+    this.engine.seek(beatsToSeconds(project.positionBeats, project));
     this.notify(project, false);
   }
   serialize() {
@@ -377,12 +382,14 @@ export class ProjectSession {
   markDownloaded() {
     this.notify(this.atCursor(), false);
   }
-  private renderKey(track: Track, clip: Clip, tempo: number) {
+  private renderKey(track: Track, clip: Clip, project: Project) {
     return JSON.stringify([
       track.instrument,
       clip.notes,
       clip.lengthBeats,
-      tempo,
+      clip.startBeat,
+      project.tempo,
+      project.tempoMarkers,
     ]);
   }
   async play() {
@@ -391,7 +398,7 @@ export class ProjectSession {
       project.tracks.flatMap((t) =>
         t.clips
           .filter((c) => c.kind === 'midi')
-          .map((c) => this.renderKey(t, c, project.tempo)),
+          .map((c) => this.renderKey(t, c, project)),
       ),
     );
     for (const key of this.renders.keys())
@@ -405,15 +412,16 @@ export class ProjectSession {
     for (const track of project.tracks)
       if (track.kind === 'midi' && track.instrument?.type !== 'synth') {
         for (const clip of track.clips) {
-          const key = this.renderKey(track, clip, project.tempo);
+          const key = this.renderKey(track, clip, project);
           if (!this.renders.has(key)) {
             const runtime = await import('./instrument-runtime');
             const buffer = await runtime.renderInstrument(
               track.instrument!,
               clip.notes ?? [],
               clip.lengthBeats ?? 4,
-              project.tempo,
+              project,
               this.soundfonts.get(track.instrument?.soundfontId ?? ''),
+              clip.startBeat,
             );
             memory += buffer.length * buffer.numberOfChannels * 4;
             if (memory > 384 * 1024 * 1024)
@@ -612,15 +620,7 @@ export class ProjectSession {
       this.copy(trackId, clipId);
       return this.paste(
         trackId,
-        clip
-          ? clip.startBeat +
-              (clip.kind === 'midi'
-                ? (clip.lengthBeats ?? 4)
-                : secondsToBeats(
-                    clip.durationSeconds,
-                    this.state.project.tempo,
-                  ))
-          : 0,
+        clip ? clipEndBeat(clip, this.state.project) : 0,
       );
     } finally {
       this.clipboard = previous;

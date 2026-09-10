@@ -1,3 +1,10 @@
+import {
+  beatsToSeconds,
+  secondsToBeats,
+  type TempoSource,
+  type TempoMarker,
+} from './tempo-map.ts';
+export { beatsToSeconds, secondsToBeats } from './tempo-map.ts';
 import { parseWav } from './audio-utils.ts';
 import {
   type MidiNote,
@@ -53,6 +60,7 @@ export type Project = {
   tempo: number;
   timeSignature: Signature;
   signatureMarkers?: SignatureMarker[];
+  tempoMarkers?: TempoMarker[];
   positionBeats: number;
   master: { volume: number; muted: boolean };
   tracks: Track[];
@@ -63,26 +71,27 @@ export type Project = {
     encoding?: 'wav' | 'mp3';
   }[];
 };
-export const beatsToSeconds = (beats: number, tempo: number) =>
-  (beats * 60) / tempo;
-export const secondsToBeats = (seconds: number, tempo: number) =>
-  (seconds * tempo) / 60;
 export const snapBeat = (beat: number, snap: boolean, division = 1) =>
   Math.max(
     0,
     snap && division > 0 ? Math.round(beat / division) * division : beat,
   );
-export const clipEndBeat = (clip: Clip, tempo: number) =>
-  clip.startBeat +
-  (clip.kind === 'midi'
-    ? (clip.lengthBeats ?? 4)
-    : secondsToBeats(clip.durationSeconds, tempo));
+export const clipEndBeat = (clip: Clip, tempo: TempoSource) => {
+  if (clip.kind === 'midi') return clip.startBeat + (clip.lengthBeats ?? 4);
+  if (typeof tempo === 'number' || !tempo.tempoMarkers?.length)
+    return clip.startBeat + secondsToBeats(clip.durationSeconds, tempo);
+  return secondsToBeats(
+    beatsToSeconds(clip.startBeat, tempo) + clip.durationSeconds,
+    tempo,
+  );
+};
 export function projectLength(project: Project) {
   const end = Math.max(
     0,
+    ...(project.tempoMarkers ?? []).map((marker) => marker.beat),
     ...(project.signatureMarkers ?? []).map((marker) => marker.beat),
     ...project.tracks.flatMap((track) =>
-      track.clips.map((clip) => clipEndBeat(clip, project.tempo)),
+      track.clips.map((clip) => clipEndBeat(clip, project)),
     ),
   );
   return Math.max(64, Math.ceil((end + 4) / 16) * 16);
@@ -223,6 +232,29 @@ export function parseProject(json: string): {
       'marker position',
     );
   }
+  const tempoMarkers =
+    input.tempoMarkers === undefined
+      ? undefined
+      : list(input.tempoMarkers, 1024)
+          .map((value) => {
+            const marker = object(value);
+            return {
+              id: text(marker.id, 'tempo marker ID'),
+              beat: number(marker.beat, 'tempo marker position', 0, 100000),
+              tempo: number(marker.tempo, 'marker tempo', 20, 300),
+            };
+          })
+          .sort((a, b) => a.beat - b.beat);
+  if (tempoMarkers) {
+    unique(
+      tempoMarkers.map((m) => m.id),
+      'tempo marker',
+    );
+    unique(
+      tempoMarkers.map((m) => String(m.beat)),
+      'tempo marker position',
+    );
+  }
   const audio = new Map<string, ArrayBuffer>();
   let total = 0,
     decodedEstimate = 0;
@@ -347,6 +379,7 @@ export function parseProject(json: string): {
     tempo: number(input.tempo, 'tempo', 20, 300),
     timeSignature: signature,
     ...(markers ? { signatureMarkers: markers } : {}),
+    ...(tempoMarkers ? { tempoMarkers } : {}),
     positionBeats: number(input.positionBeats, 'playhead position', 0, 200000),
     master: {
       volume: number(master.volume, 'master volume', -60, 6),

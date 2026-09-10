@@ -1,3 +1,4 @@
+import { beatDuration, type TempoSource } from './tempo-map.ts';
 import type { MidiNote } from './midi.ts';
 import {
   beatsToSeconds,
@@ -23,7 +24,7 @@ export function trimClip(
   clip: Clip,
   side: 'left' | 'right',
   beat: number,
-  tempo: number,
+  tempo: TempoSource,
   sourceDuration?: number,
 ): Clip {
   if (!Number.isFinite(beat)) throw new Error('Invalid clip edge position.');
@@ -56,21 +57,27 @@ export function trimClip(
       ...clip,
       durationSeconds: Math.max(
         minimum,
-        Math.min(available, beatsToSeconds(beat - clip.startBeat, tempo)),
+        Math.min(
+          available,
+          beatDuration(clip.startBeat, beat - clip.startBeat, tempo),
+        ),
       ),
     };
   const delta = Math.max(
     -clip.offsetSeconds,
-    beatsToSeconds(-clip.startBeat, tempo),
+    -beatsToSeconds(clip.startBeat, tempo),
     Math.min(
       duration - minimum,
-      beatsToSeconds(100000 - clip.startBeat, tempo),
-      beatsToSeconds(beat - clip.startBeat, tempo),
+      beatDuration(clip.startBeat, 100000 - clip.startBeat, tempo),
+      beatDuration(clip.startBeat, beat - clip.startBeat, tempo),
     ),
   );
   return {
     ...clip,
-    startBeat: clip.startBeat + secondsToBeats(delta, tempo),
+    startBeat: secondsToBeats(
+      beatsToSeconds(clip.startBeat, tempo) + delta,
+      tempo,
+    ),
     offsetSeconds: Math.max(0, clip.offsetSeconds + delta),
     durationSeconds: duration - delta,
   };
@@ -79,7 +86,7 @@ export function trimClip(
 export function splitClip(
   clip: Clip,
   beat: number,
-  tempo: number,
+  tempo: TempoSource,
 ): [Clip, Clip] {
   const end = clipEndBeat(clip, tempo);
   const minimum = clip.kind === 'midi' ? 0.0625 : 1e-6;
@@ -109,7 +116,7 @@ export function splitClip(
         length: n.start + n.length - Math.max(local, n.start),
       }));
   } else {
-    const seconds = beatsToSeconds(local, tempo);
+    const seconds = beatDuration(clip.startBeat, local, tempo);
     left.durationSeconds = seconds;
     right.offsetSeconds = clip.offsetSeconds + seconds;
     right.durationSeconds = clip.durationSeconds - seconds;
