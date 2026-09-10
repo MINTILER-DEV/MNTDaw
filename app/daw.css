@@ -496,7 +496,7 @@ input::-webkit-inner-spin-button {
   justify-content: space-between;
   color: #8d9da1;
   padding: 0 16px;
-  height: 42px;
+  height: 62px;
   flex-shrink: 0;
   border-bottom: 1px solid #303b40;
   font-size: 8px;
@@ -659,7 +659,7 @@ input::-webkit-inner-spin-button {
   position: sticky;
   top: 0;
   z-index: 8;
-  height: 42px;
+  height: 62px;
 }
 .track-corner {
   width: 206px;
@@ -684,7 +684,7 @@ input::-webkit-inner-spin-button {
   letter-spacing: 0;
 }
 .bar-ruler {
-  height: 42px;
+  height: 62px;
   flex-shrink: 0;
   position: relative;
   overflow: hidden;
@@ -699,7 +699,7 @@ input::-webkit-inner-spin-button {
 }
 .bar-numbers > span {
   position: absolute;
-  top: 6px;
+  top: 26px;
   font-family: var(--font-mono);
   font-size: 10px;
   color: #b3c1c3;
@@ -978,7 +978,7 @@ input::-webkit-inner-spin-button {
 }
 .timeline-playhead {
   position: absolute;
-  top: 42px;
+  top: 62px;
   width: 1px;
   background: #dbead1;
   z-index: 3;
@@ -987,7 +987,7 @@ input::-webkit-inner-spin-button {
 }
 .ruler-playhead {
   position: absolute;
-  top: 30px;
+  top: 50px;
   transform: translateX(-5px);
   width: 11px;
   height: 11px;
@@ -1873,7 +1873,7 @@ kbd {
 .signature-markers {
   pointer-events: none;
   position: absolute;
-  top: 23px;
+  top: 43px;
   height: 19px;
 }
 .signature-marker {
@@ -2190,7 +2190,7 @@ kbd {
 
 .signature-grid {
   position: absolute;
-  top: 42px;
+  top: 62px;
   pointer-events: none;
   z-index: 1;
   overflow: hidden;
@@ -2408,4 +2408,33 @@ kbd {
 .clip-trim {
   width: min(10px, 20%);
   min-width: 2px;
+}
+
+.tempo-marker {
+  top: -40px;
+  border-color: #8cc9d5;
+  background: #304d57;
+  color: #b7e1e8;
+}
+.timeline-hover-guide {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  border-left: 1px dashed #b9de9399;
+  z-index: 9;
+  pointer-events: none;
+}
+.timeline-hover-guide > span {
+  position: sticky;
+  top: 64px;
+  display: block;
+  width: max-content;
+  margin-left: 5px;
+  padding: 3px 5px;
+  border: 1px solid #607756;
+  border-radius: 3px;
+  background: #25352ef2;
+  color: #d0e7be;
+  font: 9px var(--font-mono);
 }

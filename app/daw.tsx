@@ -70,6 +70,14 @@ import {
   type Signature,
   type SignatureMarker,
 } from '@/lib/time-signatures';
+import {
+  audioPeakBeats,
+  beatDuration,
+  tempoAtBeat,
+  rulerBeatAt,
+  type TempoMarker,
+  type TempoSource,
+} from '@/lib/tempo-map';
 import { trimClip } from '@/lib/editing';
 import { ProjectSession } from '@/lib/project-session';
 import {
@@ -93,7 +101,6 @@ type Drag = {
   x: number;
   y: number;
   start: number;
-  duration: number;
   mode: 'move' | 'left' | 'right';
   updated?: Clip;
   moved: boolean;
@@ -103,12 +110,18 @@ function ClipWave({
   buffer,
   offset,
   duration,
+  startBeat,
+  lengthBeats,
+  tempo,
 }: {
   buffer: AudioBuffer;
   offset: number;
   duration: number;
+  startBeat: number;
+  lengthBeats: number;
+  tempo: TempoSource;
 }) {
-  const path = useMemo(() => {
+  const peaks = useMemo(() => {
     const channel = buffer.getChannelData(0);
     const data = channel.subarray(
       Math.floor(offset * buffer.sampleRate),
@@ -117,10 +130,17 @@ function ClipWave({
         Math.ceil((offset + duration) * buffer.sampleRate),
       ),
     );
-    return waveformPeaks(data, 480)
-      .map(([min, max], i) => `M${i + 0.5},${25 - max * 22}V${25 - min * 22}`)
-      .join(' ');
+    return waveformPeaks(data, 480);
   }, [buffer, offset, duration]);
+  const path = useMemo(() => {
+    const positions = audioPeakBeats(startBeat, duration, peaks.length, tempo);
+    return peaks
+      .map(
+        ([min, max], i) =>
+          `M${(positions[i] / lengthBeats) * 480},${25 - max * 22}V${25 - min * 22}`,
+      )
+      .join(' ');
+  }, [peaks, startBeat, duration, lengthBeats, tempo]);
   return (
     <svg
       className="clip-wave"
@@ -157,6 +177,10 @@ export default function Daw() {
     beat: number;
     signature: Signature;
   } | null>(null);
+  const [tempoEdit, setTempoEdit] = useState<TempoMarker | null>(null);
+  const [markerMenuOpen, setMarkerMenuOpen] = useState(false);
+  const [hoverBeat, setHoverBeat] = useState<number | null>(null);
+  const rulerContextBeat = useRef(0);
   const [resize, setResize] = useState<{
     id: string;
     y: number;
@@ -199,7 +223,7 @@ export default function Daw() {
     ? session.assets.get(selectedClip.assetId)
     : undefined;
   const length = projectLength(project);
-  const beat = secondsToBeats(position, project.tempo);
+  const beat = secondsToBeats(position, project);
   const playing = audio.status === 'playing';
   const totalClips = project.tracks.reduce(
     (sum, track) => sum + track.clips.length,
@@ -207,6 +231,12 @@ export default function Daw() {
   );
   const timelineWidth = length * zoom;
   const markers = project.signatureMarkers ?? [];
+  const tempoMarkers = project.tempoMarkers ?? [];
+  const activeTempoMarker = [...tempoMarkers]
+    .sort((a, b) => a.beat - b.beat)
+    .filter((m) => m.beat <= beat)
+    .at(-1);
+  const currentTempo = tempoAtBeat(beat, project);
   const bars = useMemo(
     () =>
       signatureBars(
@@ -238,7 +268,7 @@ export default function Daw() {
     !!selectedClip &&
     splitAt - selectedClip.startBeat >=
       (selectedClip.kind === 'midi' ? 0.0625 : 0.000001) &&
-    clipEndBeat(selectedClip, project.tempo) - splitAt >=
+    clipEndBeat(selectedClip, project) - splitAt >=
       (selectedClip.kind === 'midi' ? 0.0625 : 0.000001);
   const report = useCallback((text: string) => setMessage(text), []);
 
@@ -311,20 +341,27 @@ export default function Daw() {
 
   const seek = (nextBeat: number) =>
     engine.seek(
-      beatsToSeconds(Math.max(0, Math.min(length, nextBeat)), project.tempo),
+      beatsToSeconds(Math.max(0, Math.min(length, nextBeat)), project),
+    );
+  const pointerBeat = (clientX: number, content: HTMLElement) =>
+    Math.min(
+      length,
+      snapBeat(
+        rulerBeatAt(
+          clientX,
+          content.getBoundingClientRect().left + HEADER_WIDTH,
+          zoom,
+          length,
+        ),
+        snap,
+      ),
     );
   const seekPointer = (event: ReactPointerEvent) => {
     const content = event.currentTarget.closest<HTMLElement>(
       '.arrangement-content',
     );
     if (!content || busyRef.current) return;
-    seek(
-      snapBeat(
-        (event.clientX - content.getBoundingClientRect().left - HEADER_WIDTH) /
-          zoom,
-        snap,
-      ),
-    );
+    seek(pointerBeat(event.clientX, content));
   };
   const capturePlayhead = (event: ReactPointerEvent) => {
     if (event.button !== 0 || busyRef.current) return;
@@ -381,7 +418,7 @@ export default function Daw() {
         id: crypto.randomUUID(),
       })),
       id: crypto.randomUUID(),
-      startBeat: Math.min(100000, clipEndBeat(selectedClip, project.tempo)),
+      startBeat: Math.min(100000, clipEndBeat(selectedClip, project)),
     };
     changeTrack(selectedTrack.id, { clips: [...selectedTrack.clips, copy] });
     selectClip(copy.id);
@@ -498,7 +535,14 @@ export default function Daw() {
 
   useEffect(() => {
     const keydown = (event: KeyboardEvent) => {
-      if (busyRef.current || help || settings || discard || signatureEdit)
+      if (
+        busyRef.current ||
+        help ||
+        settings ||
+        discard ||
+        signatureEdit ||
+        tempoEdit
+      )
         return;
       const target = event.target as HTMLElement;
       const typing = !!target.closest(
@@ -605,6 +649,7 @@ export default function Daw() {
     selectedTrack,
     beat,
     signatureEdit,
+    tempoEdit,
     snap,
     snapBeat,
   ]);
@@ -643,10 +688,6 @@ export default function Daw() {
       x: event.clientX,
       y: event.clientY,
       start: clip.startBeat,
-      duration:
-        clip.kind === 'midi'
-          ? beatsToSeconds(clip.lengthBeats ?? 4, project.tempo)
-          : clip.durationSeconds,
       mode,
       moved: false,
     };
@@ -680,22 +721,16 @@ export default function Daw() {
       }
     } else {
       const edge =
-        origin.mode === 'left'
-          ? clip.startBeat
-          : clipEndBeat(clip, project.tempo);
+        origin.mode === 'left' ? clip.startBeat : clipEndBeat(clip, project);
       const updated = trimClip(
         clip,
         origin.mode,
         snapBeat(edge + dx / zoom, snap),
-        project.tempo,
+        project,
         session.assets.get(clip.assetId)?.buffer.duration,
       );
       next.updated = updated;
       next.start = updated.startBeat;
-      next.duration =
-        updated.kind === 'midi'
-          ? beatsToSeconds(updated.lengthBeats ?? 4, project.tempo)
-          : updated.durationSeconds;
     }
     dragRef.current = next;
     setDrag(next);
@@ -803,6 +838,31 @@ export default function Daw() {
         action: () => session.remove(track.id, clip?.id),
       },
     ].map((action) => ({ ...action, disabled: !!busy }));
+  const saveTempo = () => {
+    if (!tempoEdit) return;
+    if (
+      tempoMarkers.length >= 1024 &&
+      !tempoMarkers.some((m) => m.id === tempoEdit.id)
+    ) {
+      report('Projects support up to 1024 tempo markers.');
+      return;
+    }
+    if (
+      tempoMarkers.some(
+        (m) =>
+          m.id !== tempoEdit.id && Math.abs(m.beat - tempoEdit.beat) < 1e-7,
+      )
+    )
+      return;
+    session.edit((p) => ({
+      ...p,
+      tempoMarkers: [
+        ...(p.tempoMarkers ?? []).filter((m) => m.id !== tempoEdit.id),
+        tempoEdit,
+      ].sort((a, b) => a.beat - b.beat),
+    }));
+    setTempoEdit(null);
+  };
   const saveSignature = () => {
     if (!signatureEdit) return;
     if (
@@ -958,13 +1018,22 @@ export default function Daw() {
         <div className="tempo-control">
           <NumberField
             label="TEMPO"
-            value={project.tempo}
+            value={currentTempo}
             min={20}
             max={300}
             step={0.1}
             disabled={!!busy}
             onChange={(tempo) =>
-              session.edit((previous) => ({ ...previous, tempo }))
+              session.edit((previous) =>
+                activeTempoMarker
+                  ? {
+                      ...previous,
+                      tempoMarkers: (previous.tempoMarkers ?? []).map((m) =>
+                        m.id === activeTempoMarker.id ? { ...m, tempo } : m,
+                      ),
+                    }
+                  : { ...previous, tempo },
+              )
             }
           />
           <span>BPM</span>
@@ -1232,6 +1301,26 @@ export default function Daw() {
           <div className="arrangement-scroll" ref={scrollRef}>
             <div
               className="arrangement-content"
+              onPointerMove={(event) => {
+                if (
+                  event.pointerType === 'touch' ||
+                  busyRef.current ||
+                  markerMenuOpen
+                )
+                  return;
+                const left =
+                  (scrollRef.current?.getBoundingClientRect().left ??
+                    event.currentTarget.getBoundingClientRect().left) +
+                  HEADER_WIDTH;
+                setHoverBeat(
+                  event.clientX < left
+                    ? null
+                    : pointerBeat(event.clientX, event.currentTarget),
+                );
+              }}
+              onPointerLeave={() => {
+                if (!markerMenuOpen) setHoverBeat(null);
+              }}
               style={
                 {
                   width: HEADER_WIDTH + timelineWidth,
@@ -1241,9 +1330,41 @@ export default function Daw() {
                 } as CSSProperties
               }
             >
+              {hoverBeat !== null && !busy && (
+                <div
+                  className="timeline-hover-guide"
+                  aria-hidden="true"
+                  style={{ left: HEADER_WIDTH + hoverBeat * zoom }}
+                >
+                  <span>
+                    {signaturePosition(
+                      hoverBeat,
+                      project.timeSignature,
+                      markers,
+                    )}
+                  </span>
+                </div>
+              )}
               <div className="ruler-row">
                 <div className="track-corner">
                   <span>TRACKS</span>
+                  <button
+                    className="marker-add"
+                    title="Add tempo change at playhead"
+                    disabled={!!busy}
+                    onClick={() => {
+                      const at = snapBeat(beat, snap);
+                      setTempoEdit(
+                        tempoMarkers.find((m) => m.beat === at) ?? {
+                          id: crypto.randomUUID(),
+                          beat: at,
+                          tempo: currentTempo,
+                        },
+                      );
+                    }}
+                  >
+                    + BPM
+                  </button>
                   <button
                     className="marker-add"
                     title="Add time signature change at playhead"
@@ -1260,20 +1381,64 @@ export default function Daw() {
                   </button>
                 </div>
                 <EditMenu
-                  actions={[
-                    {
-                      label: 'Add time signature change here',
-                      disabled: !!busy,
-                      action: () =>
-                        setSignatureEdit({
-                          id: crypto.randomUUID(),
-                          beat: snapBeat(beat, snap),
-                          signature: currentSignature,
-                        }),
-                    },
-                  ]}
+                  onOpenChange={(open) => {
+                    setMarkerMenuOpen(open);
+                    if (!open) setHoverBeat(null);
+                  }}
+                  actions={() => {
+                    const at = rulerContextBeat.current;
+                    const signature =
+                      [...markers]
+                        .sort((a, b) => a.beat - b.beat)
+                        .filter((m) => m.beat <= at)
+                        .at(-1)?.signature ?? project.timeSignature;
+                    return [
+                      {
+                        label: 'Add tempo change here',
+                        disabled: !!busy,
+                        action: () =>
+                          setTempoEdit(
+                            tempoMarkers.find(
+                              (m) => Math.abs(m.beat - at) < 1e-7,
+                            ) ?? {
+                              id: crypto.randomUUID(),
+                              beat: at,
+                              tempo: tempoAtBeat(at, project),
+                            },
+                          ),
+                      },
+                      {
+                        label: 'Add time signature change here',
+                        disabled: !!busy,
+                        action: () =>
+                          setSignatureEdit(
+                            markers.find(
+                              (m) => Math.abs(m.beat - at) < 1e-7,
+                            ) ?? {
+                              id: crypto.randomUUID(),
+                              beat: at,
+                              signature,
+                            },
+                          ),
+                      },
+                    ];
+                  }}
                 >
                   <button
+                    onContextMenuCapture={(event) => {
+                      const content = event.currentTarget.closest<HTMLElement>(
+                        '.arrangement-content',
+                      );
+                      if (!content) return;
+                      const at =
+                        event.button === 2 ||
+                        event.clientX !== 0 ||
+                        event.clientY !== 0
+                          ? pointerBeat(event.clientX, content)
+                          : snapBeat(beat, snap);
+                      rulerContextBeat.current = at;
+                      setHoverBeat(at);
+                    }}
                     className="bar-ruler"
                     aria-label="Seek on bar ruler"
                     style={{ width: timelineWidth }}
@@ -1320,6 +1485,40 @@ export default function Daw() {
                   className="signature-markers"
                   style={{ left: HEADER_WIDTH, width: timelineWidth }}
                 >
+                  {tempoMarkers.map((marker) => (
+                    <EditMenu
+                      key={marker.id}
+                      actions={[
+                        {
+                          label: 'Edit tempo',
+                          action: () => setTempoEdit(marker),
+                          disabled: !!busy,
+                        },
+                        {
+                          label: 'Delete marker',
+                          destructive: true,
+                          disabled: !!busy,
+                          action: () =>
+                            session.edit((p) => ({
+                              ...p,
+                              tempoMarkers: (p.tempoMarkers ?? []).filter(
+                                (m) => m.id !== marker.id,
+                              ),
+                            })),
+                        },
+                      ]}
+                    >
+                      <button
+                        className="signature-marker tempo-marker"
+                        style={{ left: marker.beat * zoom }}
+                        title={`${marker.tempo} BPM at beat ${marker.beat}`}
+                        disabled={!!busy}
+                        onClick={() => setTempoEdit(marker)}
+                      >
+                        {marker.tempo} BPM
+                      </button>
+                    </EditMenu>
+                  ))}
                   {markers.map((marker) => (
                     <EditMenu
                       key={marker.id}
@@ -1522,6 +1721,7 @@ export default function Daw() {
                       onPointerDown={(event) => {
                         if (
                           event.target !== event.currentTarget ||
+                          event.button !== 0 ||
                           busyRef.current
                         )
                           return;
@@ -1579,13 +1779,17 @@ export default function Daw() {
                         const displayed = moving?.updated ?? clip;
                         const start = moving?.start ?? clip.startBeat;
                         const duration =
-                          moving?.duration ??
-                          (clip.kind === 'midi'
-                            ? beatsToSeconds(
-                                clip.lengthBeats ?? 4,
-                                project.tempo,
+                          displayed.kind === 'midi'
+                            ? beatDuration(
+                                start,
+                                displayed.lengthBeats ?? 4,
+                                project,
                               )
-                            : clip.durationSeconds);
+                            : displayed.durationSeconds;
+                        const displayEnd = clipEndBeat(
+                          { ...displayed, startBeat: start },
+                          project,
+                        );
                         const rowDelta = moving
                           ? rowTop(moving.targetId) - rowTop(track.id)
                           : 0;
@@ -1601,8 +1805,7 @@ export default function Daw() {
                                 height: rowHeight(track) - 18,
                                 width: Math.max(
                                   12,
-                                  secondsToBeats(duration, project.tempo) *
-                                    zoom,
+                                  (displayEnd - start) * zoom,
                                 ),
                                 transform: rowDelta
                                   ? `translateY(${rowDelta}px)`
@@ -1689,6 +1892,9 @@ export default function Daw() {
                               )}
                               {asset && (
                                 <ClipWave
+                                  startBeat={start}
+                                  lengthBeats={displayEnd - start}
+                                  tempo={project}
                                   buffer={asset.buffer}
                                   offset={displayed.offsetSeconds}
                                   duration={duration}
@@ -2079,7 +2285,7 @@ export default function Daw() {
                             selectedClip,
                             'right',
                             selectedClip.startBeat + lengthBeats,
-                            project.tempo,
+                            project,
                           ),
                         )
                       }
@@ -2243,6 +2449,63 @@ export default function Daw() {
         }}
       />
       <Dialog
+        open={tempoEdit !== null}
+        onOpenChange={(open) => {
+          if (!open) setTempoEdit(null);
+        }}
+      >
+        <DialogContent className="confirm-dialog">
+          <DialogTitle>Tempo change</DialogTitle>
+          <DialogDescription>
+            Set the BPM from this position onward. MIDI follows the tempo map;
+            audio keeps its original playback speed.
+          </DialogDescription>
+          {tempoEdit && (
+            <>
+              <div className="signature-fields">
+                <NumberField
+                  label="Tempo (BPM)"
+                  value={tempoEdit.tempo}
+                  min={20}
+                  max={300}
+                  step={0.1}
+                  onChange={(tempo) => setTempoEdit({ ...tempoEdit, tempo })}
+                />
+                <NumberField
+                  label="Position in quarter-note beats"
+                  value={tempoEdit.beat}
+                  min={0}
+                  max={100000}
+                  step={snap ? snapDivision : 0.01}
+                  onChange={(beat) => setTempoEdit({ ...tempoEdit, beat })}
+                />
+              </div>
+              {tempoMarkers.some(
+                (m) =>
+                  m.id !== tempoEdit.id &&
+                  Math.abs(m.beat - tempoEdit.beat) < 1e-7,
+              ) && (
+                <p className="field-note" role="alert">
+                  A tempo marker already exists here. Edit that marker or choose
+                  another position.
+                </p>
+              )}
+              <button
+                className="button primary"
+                disabled={tempoMarkers.some(
+                  (m) =>
+                    m.id !== tempoEdit.id &&
+                    Math.abs(m.beat - tempoEdit.beat) < 1e-7,
+                )}
+                onClick={saveTempo}
+              >
+                Apply tempo
+              </button>
+            </>
+          )}
+        </DialogContent>
+      </Dialog>
+      <Dialog
         open={signatureEdit !== null}
         onOpenChange={(open) => {
           if (!open) setSignatureEdit(null);
@@ -2295,7 +2558,7 @@ export default function Daw() {
                   value={signatureEdit.beat}
                   min={0}
                   max={100000}
-                  step={0.25}
+                  step={snap ? snapDivision : 0.01}
                   onChange={(beat) =>
                     setSignatureEdit({ ...signatureEdit, beat })
                   }
@@ -2402,8 +2665,8 @@ export default function Daw() {
           </p>
           <p className="field-note">
             Projects embed the original WAVs. Tempo moves clip starts on the
-            beat grid; audio keeps its original speed. MIDI follows project
-            tempo; signature changes are available on the ruler.
+            beat grid; audio keeps its original speed. MIDI follows project the
+            active tempo; right-click the ruler for tempo and signature changes.
           </p>
           <button className="button primary" onClick={() => setHelp(false)}>
             Back to the project

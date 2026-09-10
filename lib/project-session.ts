@@ -106,6 +106,7 @@ export class ProjectSession {
       old.tracks !== project.tracks ||
       old.tempo !== project.tempo ||
       old.tempoMarkers !== project.tempoMarkers ||
+      old.signatureMarkers !== project.signatureMarkers ||
       this.engine.getSnapshot().duration === 0
     ) {
       this.engine.setArrangement(

@@ -16,7 +16,9 @@ export type EditAction = {
 export function EditMenu({
   children,
   actions,
+  onOpenChange,
 }: {
+  onOpenChange?: (open: boolean) => void;
   children: ReactElement;
   actions: EditAction[] | (() => EditAction[]);
 }) {
@@ -25,6 +27,7 @@ export function EditMenu({
     <ContextMenu
       onOpenChange={(open) => {
         if (open && typeof actions === 'function') setResolved(actions());
+        onOpenChange?.(open);
       }}
     >
       <ContextMenuTrigger

@@ -74,3 +74,30 @@ export function rulerBeatAt(
 ) {
   return Math.max(0, Math.min(length, (clientX - rulerLeft) / zoom));
 }
+
+/** Place uniformly sampled audio peaks on a beat grid without stretching audio. */
+export function audioPeakBeats(
+  start: number,
+  duration: number,
+  count: number,
+  source: TempoSource,
+) {
+  const markers = segments(source).filter((marker) => marker.beat > start);
+  let beat = start,
+    elapsed = 0,
+    tempo = tempoAtBeat(start, source),
+    next = 0;
+  return Array.from({ length: count }, (_, i) => {
+    const time = ((i + 0.5) * duration) / count;
+    while (next < markers.length) {
+      const marker = markers[next];
+      const boundary = elapsed + ((marker.beat - beat) * 60) / tempo;
+      if (boundary > time) break;
+      beat = marker.beat;
+      elapsed = boundary;
+      tempo = marker.tempo;
+      next++;
+    }
+    return beat + ((time - elapsed) * tempo) / 60 - start;
+  });
+}

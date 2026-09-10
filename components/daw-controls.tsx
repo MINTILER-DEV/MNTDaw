@@ -120,6 +120,8 @@ export function NumberField({
         step={step}
         disabled={disabled}
         onBlur={(event) => {
+          // Display rounding must not change an untouched triplet position.
+          if (event.target.value === event.target.defaultValue) return;
           const next = event.target.valueAsNumber;
           if (Number.isFinite(next)) {
             const safe = Math.max(min, Math.min(max, next));

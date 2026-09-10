@@ -1,6 +1,7 @@
 import { beforeEach, test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  audioPeakBeats,
   beatsToSeconds,
   secondsToBeats,
   beatDuration,
@@ -160,6 +161,22 @@ void test('editing and deleting BPM changes preserve beat position with undo, re
   );
 });
 
+void test('a signature marker past the last clip extends the playable timeline too', () => {
+  const session = new ProjectSession();
+  session.edit((p) => ({ ...p, tempoMarkers: map.tempoMarkers }));
+  session.edit((p) => ({
+    ...p,
+    signatureMarkers: [{ id: 'later', beat: 200, signature: [3, 4] }],
+  }));
+  const project = session.getSnapshot().project;
+  near(
+    session.engine.getSnapshot().duration,
+    beatsToSeconds(projectLength(project), project),
+  );
+  session.engine.seek(beatsToSeconds(200, project));
+  near(secondsToBeats(session.engine.position, project), 200);
+});
+
 void test('audio imports and duplication meet at source ends under a tempo map', async () => {
   const session = new ProjectSession();
   session.edit((p) => ({ ...p, tempoMarkers: map.tempoMarkers }));
@@ -229,4 +246,11 @@ void test('hover and insertion coordinates account for horizontal scroll, zoom a
   assert.equal(snapBeat(at, false), 9.625);
   assert.equal(rulerBeatAt(0, 206, 64, 128), 0);
   assert.equal(rulerBeatAt(100000, 206, 64, 128), 128);
+});
+
+void test('audio waveform peaks align with the seconds clock when a clip crosses BPM changes', () => {
+  const peaks = audioPeakBeats(2, 6, 12, map);
+  for (let i = 0; i < peaks.length; i++)
+    near(beatsToSeconds(2 + peaks[i], map), 1 + (i + 0.5) * 0.5);
+  assert.deepEqual(audioPeakBeats(4, 2, 4, 120), [0.5, 1.5, 2.5, 3.5]);
 });
