@@ -19,7 +19,7 @@ Open the localhost URL printed by Vite. Import WAV/MP3 files, or add an instrume
 - Named projects with a versioned `.mnt` file format, save/open, unsaved-change prompts, and 50 steps of undo/redo.
 - Add, rename, and remove tracks; per-track volume, mute, solo, and master routing.
 - Import multiple WAVs or MP3s by file picker or drag and drop. Imports onto a selected track are placed sequentially from the playhead; imports onto new tracks share a start position.
-- Drag clips along the timeline or between tracks, snap to beats, trim the right edge, duplicate, delete, or edit precise start/offset/duration values in the inspector.
+- Drag clips along the timeline or between tracks, snap to beats, trim either edge, duplicate, delete, or edit precise start/offset/duration values in the inspector.
 - Context menus on tracks, audio/MIDI clips, and notes: cut, copy, paste, duplicate, and delete. Track menus also import audio. Drag the bottom edge of a track header to resize it, or focus the handle and use up/down arrows.
 - A piano roll with pitch, velocity, start, note length, note dragging/resizing, quantized drawing, and live computer/Web MIDI keyboard capture. MIDI file import creates instrument tracks and follows the current project tempo.
 - A built-in polyphonic oscillator synth with waveform, attack, decay, sustain, release, cutoff, resonance, and detune controls.
@@ -59,7 +59,7 @@ Project opening validates the document, asset references, media bytes, MIDI rang
 | Cut / copy / paste       | Ctrl/Cmd+X / C / V             |
 | Duplicate selection      | Ctrl/Cmd+D                     |
 
-Drag a library file to a lane, or double-click it to insert at the playhead on the selected track. The library button also supports Enter. Drag the clip's right edge to trim; use the inspector for keyboard-accessible precise editing.
+Drag a library file to a lane, or double-click it to insert at the playhead on the selected track. The library button also supports Enter. Drag either clip edge to trim; use the inspector for keyboard-accessible precise editing.
 
 ## MIDI and instruments
 
@@ -81,6 +81,14 @@ The transport signature button edits the initial signature. Use the **+ signatur
 - Use the piano-roll zoom buttons, Ctrl/Cmd+wheel, or Ctrl/Cmd+plus/minus while the editor has focus. Click the percentage or use Ctrl/Cmd+0 to reset. Zoom ranges from 25% to 400% and keeps the visible center in place.
 - Split a selected WAV, MP3, or MIDI clip using the scissors button, **Split clip at playhead** in its context menu, or Ctrl/Cmd+B in the arrangement. Alt-click directly on a clip to split at the pointer. Arrangement snap applies to both methods; disable it for finer cuts. Splits must be inside a clip, and MIDI fragments must be at least 1/64 note long.
 - Audio splits reuse the original media with contiguous source offsets. MIDI splits retain notes on their respective sides; a note crossing the split becomes two notes and retriggers at the boundary. Splits are undoable and saved in the project. **Cut to clipboard** remains a separate action.
+
+### Clip edges, playheads, and snap
+
+Drag a clip's left or right edge to shorten or extend it. Audio trims reuse the original file: the left edge cannot reveal audio before source time zero, and the right edge cannot go past the file's end. Left-edge trimming keeps the clip's end fixed. MIDI clips can extend to 4096 quarter-note beats; shortening them crops notes at the new edges, and Undo restores the removed notes. Extending a MIDI clip adds empty space. Double-click anywhere in a MIDI clip's miniature note display to open its piano roll.
+
+The piano roll has its own ruler and bright playhead, synchronized to the main project position. Its beat 1 corresponds to the MIDI clip's start in the arrangement; the playhead hides when the main position is outside the clip. Drag the ruler or bright playhead in either view to seek the same transport. The piano ruler/playhead also supports arrow keys, Home, and End. The faint piano-grid line remains the note insertion/paste cursor.
+
+Choose the arrangement snap division beside the magnet button, and the piano roll division in its Grid control. Both offer whole through 1/64 notes and quarter/eighth-note triplets. Turn off the arrangement magnet or choose Off in the piano roll for free positioning. Snap divisions affect clip positioning, edge trims, splits, note edits, and playhead dragging in the corresponding view.
 
 ## Deploy on Vercel
 

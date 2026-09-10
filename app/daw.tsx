@@ -2396,9 +2396,9 @@ export default function Daw() {
             </span>
           </div>
           <p className="field-note">
-            Drag clips between tracks. Drag a clip’s right edge to trim it. Use
-            the inspector for precise timing. Double-click a library file to
-            insert it at the playhead.
+            Drag clips between tracks. Drag either clip edge to trim it. Use the
+            inspector for precise timing. Double-click a library file to insert
+            it at the playhead.
           </p>
           <p className="field-note">
             Projects embed the original WAVs. Tempo moves clip starts on the

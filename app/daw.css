@@ -2404,3 +2404,8 @@ kbd {
 .note-cursor {
   opacity: 0.35;
 }
+
+.clip-trim {
+  width: min(10px, 20%);
+  min-width: 2px;
+}
